@@ -1,0 +1,18 @@
+# ===== 构建产物（由 make-*.sh / package-desktop.sh 生成，体积大，勿入仓）=====
+/dist/
+*.log
+
+# ===== 编译/运行时产物（由 build-wheels.sh 生成，可重建）=====
+/artifacts/
+
+# ===== 第三方参考仓库（仅本地参考，不入库）=====
+/reference-repo/
+
+# ===== 编辑器 / 系统临时 =====
+.DS_Store
+*~
+*.swp
+
+# ===== 会话级临时脚本（非仓库内容）=====
+/build-rc*.sh
+/resume*.sh

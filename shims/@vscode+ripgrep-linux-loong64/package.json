@@ -1,0 +1,9 @@
+{
+  "name": "@vscode/ripgrep-linux-loong64",
+  "version": "1.18.0-loong64.1",
+  "description": "LoongArch64 ripgrep binary for @vscode/ripgrep (dsh loong64 adaption shim)",
+  "private": true,
+  "os": ["linux"],
+  "cpu": ["loong64"],
+  "files": ["bin/rg"]
+}

@@ -1,0 +1,14 @@
+diff --git a/lib/index.js b/lib/index.js
+index 0a75fc9363..4cc3cf0096 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -569,6 +569,9 @@ function createEntryApi(packageDir) {
+     let bindingInfo;
+     return {
+         requireBuiltin(moduleId) {
++            // loong64-adaption[EB2]: 龙芯没有该 addon 的原生构建, 且 Electron 指纹表只覆盖
++            // 官方 Electron 版本; 宿主进程带 --expose-internals 时直接用内置 require 取内部模块。
++            try { return require(moduleId); } catch (_error) { /* fall through to the native binding */ }
+             return binding.requireBuiltin(moduleId);
+         },
+         isAllowedInternalId(moduleId) {
