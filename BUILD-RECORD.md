@@ -50,9 +50,26 @@
 | `package-desktop.sh` | ✅ `linux-loong64-unpacked` |
 | `make-deb.sh` / `make-dist.sh` / `make-pkg.sh` | 见下方产物 |
 
+## 原生 Python wheel（本机从源码重编）
+
+4 个 loong64 wheel 由 `build-wheels.sh` 在构建机用独立 CPython 从源码编译（不再使用外来预编译
+wheel），链接构建机自己的系统库。`lock.json` 的 `targets.linux-loong64.wheels` 已更新为
+`file://` 本地路径 + 下列 sha256：
+
+| wheel | sha256 |
+| --- | --- |
+| `numpy-2.3.5-cp312-cp312-linux_loongarch64.whl` | `58c6990dc25cf9e21a0ddffbaaecfbfcd8ed1bd3abe5d2fc0b7437816839f2ed` |
+| `pandas-3.0.1-cp312-cp312-linux_loongarch64.whl` | `3c6dd60bee14cd426838ddb1f4e5ca34b11d21180955349ae6247416b6941ba0` |
+| `Pillow-12.3.0-cp312-cp312-linux_loongarch64.whl` | `db11c7b6c162c9260a65a6e2d37e042608809d97f650a98131de6cc80dab4980` |
+| `lxml-6.1.3-cp312-cp312-linux_loongarch64.whl` | `29e9df97ebd4fdb5ef51976ebc59044738ff6265b200880d70891dffc3681c7a` |
+
+> 编译依赖：本机需 `gfortran` / `libxslt1-dev` / `libfreetype6-dev` / `libjpeg-dev` / `zlib1g-dev`
+> / `libtiff-dev` / `libwebp-dev` / `libimagequant-dev` / `libraqm-dev` / `patchelf` / `ninja-build`；
+> 构建隔离关闭，预装 `meson` `meson-python` `Cython` `versioneer` `pybind11`（见 `build-wheels.sh` 头部）。
+
 ## 产物（SHA256）
 
-> 构建于 2026-11-04 08:32，产物见 `dist/`，各文件 SHA256 见 `dist/SHA256SUMS`。
+> 产物见 `dist/`，各文件 SHA256 见 `dist/SHA256SUMS`。
 
 | 文件 | 大小 | SHA256 |
 | --- | --- | --- |
@@ -61,14 +78,20 @@
 | `deepseek-harness.desktop` | 288 B | `37557123e839fe7099495f4738dcac66478a2fcc5c555ca698f32632f56c43eb` |
 | `install.sh` | 2035 B | `e0d73b2b9e3d140e64a83af9ee9c93a8b063f4b4f3890721a7cfe65cb3c7a2f7` |
 
-> 说明：Python 运行时所需的 libcblas / libxml2 等系统库已在打包时注入
-> `linux-loong64-unpacked/resources/runtime/primary-runtime/dependencies/python/lib`，
-> 故 `.deb` / `.tar.gz` 为完整自包含包，目标机无需额外安装 BLAS/XML 等依赖（见 MISSING-RUNTIME-LIBS.md）。
+> ⚠️ 上表 `.deb` / `.tar.gz` 为 **rc.5 旧构建产物**（使用外来 wheel + 注入 blas-libs）。
+> 改用本机原生 wheel 并改为声明依赖后，需重打才会更新（见下方复现命令）；届时 sha256 会变化。
+>
+> 新策略：`.deb` 由 `make-deb.sh` 把 16 个 Python 系统库 apt 包（见 MISSING-RUNTIME-LIBS.md）
+> 写进 `Depends`，**不再向产物注入任何系统库**；`.deb` 目标机 `dpkg -i` 后 `apt` 自动补齐，
+> `.tar.gz` 需目标机手动 `apt install`。
 
 ## 复现命令
 
 ```bash
 cd dsh_desktop-loong64
+# 1) 本机重编 4 个原生 wheel (若尚未)
+./build-wheels.sh
+# 2) 完整构建 + 打包 (会自动 check-runtime-libs 并声明 Depends)
 DSH_SRC_TREE=../dsh DSH_DESKTOP_ELECTRON_DIST=../electron-loong64/electron-43.7.7 \
   ./build.sh
 sha256sum dist/* > dist/SHA256SUMS

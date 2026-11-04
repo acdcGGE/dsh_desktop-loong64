@@ -70,12 +70,18 @@ echo "==> deb 版本: $DEB_VER"
 
 # ---------------------------------------------------------------- 依赖声明
 # Electron/Chromium 在 Debian 系上的常见运行时依赖; 其他发行版包名不同, 故留空
+# 注意: 4 个原生 Python 轮子 (numpy/pandas/lxml/pillow) 链接的是本机构建机的系统库,
+#   故此处必须把它们的运行时 .so 所属 apt 包全部声明为 Depends, 目标机 dpkg -i 时由
+#   apt 解析安装。包名均为无版本号的标准包: libblas3 会带 libgfortran5, libxml2 会带 ICU。
 DEPENDS=""
 if [[ -f /etc/os-release ]] && grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu)' /etc/os-release; then
   DEPENDS="libc6, libgtk-3-0, libnotify4, libnss3, libxss1, libxtst6, xdg-utils, \
 libatspi2.0-0, libdrm2, libgbm1, libasound2, libcups2, libxkbcommon0, \
-libpango-1.0-0, libcairo2, libsecret-1-0"
-  echo "==> 宿主为 Debian 系, 写入 Electron 运行时依赖"
+libpango-1.0-0, libcairo2, libsecret-1-0, \
+libblas3, liblapack3, libxml2, libxslt1.1, libfreetype6, libjpeg62-turbo, \
+libimagequant0, libraqm0, liblcms2-2, libtiff6, libwebp7, libwebpdemux2, \
+libwebpmux3, libxcb1, zlib1g"
+  echo "==> 宿主为 Debian 系, 写入 Electron + Python 运行时依赖"
 else
   echo "==> 宿主非 Debian 系, Depends 留空 (避免依赖名不匹配导致安装失败)"
 fi

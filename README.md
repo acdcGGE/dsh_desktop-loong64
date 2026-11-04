@@ -41,7 +41,7 @@
 - **Electron 二进制**：[`darkyzhou/electron-loong64`](https://github.com/darkyzhou/electron-loong64) 的 **v43.7.7**，解压到 `electron-loong64/electron-43.7.7/`。通过 `DSH_DESKTOP_ELECTRON_DIST` 指定。
 - **龙芯 npm 镜像**：`https://registry.loongnix.cn:5873`——loong64 平台原生包（含 rolldown/lightningcss 的 loong64 绑定）仅此源提供。脚本默认已设置，可用 `DSH_DESKTOP_NPM_REGISTRY` 覆盖。
 - **编译依赖**：`gcc` / `make` / `python3` / `cargo`（部分原生模块用 node-gyp 编译）。
-- **运行时系统库（关键！）**：打包进最终包的 Python 运行时依赖若干 loong64 系统原生库（`libcblas` / `libblas` / `liblapack` / `libgfortran` / `libjpeg` / `libimagequant` / `libraqm` / `libxml2` / `libicu` 等），这些**不会随 wheel 分发**，必须先在构建机装好。这些 wheel 是在比 Deepin 25 更新的环境编译的，**部分库版本较新**（如 `libxml2.so.16` 需 libxml2 ≥ 2.14，Deepin 25 自带仅 2.12）。完整清单与 `apt install` 命令见 **[`MISSING-RUNTIME-LIBS.md`](./MISSING-RUNTIME-LIBS.md)**。装好后跑 `python3 resolve-runtime-libs.py` 会从 `/usr/lib` 取出并打包进最终产物（无需任何外部媒体盘）。
+- **运行时系统库（关键！）**：4 个 Python 原生 wheel（`numpy` / `pandas` / `Pillow` / `lxml`）在**构建机本机从源码编译**（`build-wheels.sh`），链接的是构建机自己的系统库（`libblas3` / `liblapack3` / `libxml2` / `libxslt1.1` / `libfreetype6` / `libjpeg62-turbo` / `libimagequant0` / `libraqm0` / `liblcms2-2` / `libtiff6` / `libwebp7` / `libwebpdemux2` / `libwebpmux3` / `libxcb1` / `zlib1g`），这些**不会随 wheel 分发**。本仓库**不再搬运任何系统库**：`.deb` 由 `make-deb.sh` 把这些包写进 `Depends`，目标机 `dpkg -i` 后 `apt` 自动补齐；`.tar.gz` 则需目标机手动 `apt install`（命令见 **[`MISSING-RUNTIME-LIBS.md`](./MISSING-RUNTIME-LIBS.md)**）。构建机需先装好这些包，`build.sh` 会调用 `check-runtime-libs.py` 校验。
 - **打包依赖**：
   - `.deb`：`dpkg-deb` + `fakeroot`
   - `.pkg.tar.zst`：`bsdtar`（libarchive）+ `zstd`
@@ -147,7 +147,7 @@ cd ../dsh_desktop-loong64
 
 - **glibc 版本不符**：若误用官方 Electron 44.x，启动报 `version 'GLIBC_2.42' not found`。务必用 darkyzhou 的 43.7.7。
 - **`require('@.../binding-linux-loong64-gnu')` 失败 / 构建中途崩溃**：几乎总是 loong64 原生绑定缺失。确认 `install-loong64-bindings.sh` 是在 `pnpm install` 之后运行的；重跑它即可。`install-loong64-bindings.sh` 会打印已装/缺失清单。
-- **`prepare:runtime` 冒烟测试报 `ImportError: libxxx.so.N: cannot open shared object file`**：Python 运行时缺系统原生库（典型如 `libcblas.so.3` / `libxml2.so.16`）。这是 numpy/Pillow/lxml 的 loong64 wheel 链接了构建机缺失的库。先按 [`MISSING-RUNTIME-LIBS.md`](./MISSING-RUNTIME-LIBS.md) 在构建机 `apt install` 对应包（注意版本约束），再跑 `python3 resolve-runtime-libs.py` 把库取出；脚本会把缺失项明确列出，未满足前不要继续打包。
+- **`prepare:runtime` 冒烟测试报 `ImportError: libxxx.so.N: cannot open shared object file`**：Python 运行时缺系统原生库。这是 numpy/Pillow/lxml 的 loong64 wheel 链接了构建机缺失的库。`build.sh` 会先跑 `check-runtime-libs.py` 扫描并列出缺的 apt 包，按 [`MISSING-RUNTIME-LIBS.md`](./MISSING-RUNTIME-LIBS.md) 在构建机 `apt install` 对应包即可（无需任何外部媒体盘）。
 - **`file` 命令缺失的"假失败"**：历史版本会在原生二进制其实编译成功时误报失败。已修复；若仍见，属信息展示行，可用 `verify-launcher-binary.mjs` 真校验。
 - **`ELECTRON_RUN_AS_NODE` 陷阱**：若外部环境（部分 agent / IDE 沙箱）把它置为 `1`，Electron 会退化成纯 Node.js 弹 REPL 而非桌面应用。启动器会 `unset` 该变量规避。
 - **显示后端**：部分 loong64 Chromium 默认选 Wayland 却连不上，报 `Failed to initialize Wayland platform`。启动器用 `--ozone-platform=x11` 显式指定 X11；可用 `DSH_DESKTOP_OZONE_PLATFORM=wayland|x11` 切换。
