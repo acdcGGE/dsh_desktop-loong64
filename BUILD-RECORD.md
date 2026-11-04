@@ -16,6 +16,7 @@
 | npm `electron` | 锁文件 `44.7.0`（仅版本推断；实际二进制 43.7.7） |
 | Node 工具链 | loong64 Node 24 + pnpm 11（`toolchain/node`） |
 | npm 镜像 | `https://registry.loongnix.cn:5873` |
+| Node 头文件镜像 | `https://npmmirror.com/mirrors/node`（`NODEJS_ORG_MIRROR`，供 node-gyp 编 node-pty） |
 
 ## 适配与补丁
 
@@ -47,7 +48,8 @@
 | `install-loong64-bindings.sh` | ✅ |
 | `pnpm run build:lib` | ✅ |
 | `pnpm run build:desktop` | ✅ |
-| `package-desktop.sh` | ✅ `linux-loong64-unpacked` |
+| `check-runtime-libs.py` | ✅ 16 个 Python 系统库 apt 包均已安装 |
+| `package-desktop.sh` | ✅ `linux-loong64-unpacked`（node-pty 经镜像下载头文件后编译通过） |
 | `make-deb.sh` / `make-dist.sh` / `make-pkg.sh` | 见下方产物 |
 
 ## 原生 Python wheel（本机从源码重编）
@@ -73,17 +75,26 @@ wheel），链接构建机自己的系统库。`lock.json` 的 `targets.linux-lo
 
 | 文件 | 大小 | SHA256 |
 | --- | --- | --- |
-| `deepseek-harness_0.2.1~rc.5-1_loong64.deb` | 364821482 B (≈348 MiB) | `0b64060f496c76b602a6e7e0eeba9186efd0786ed8b3d0e062ee09f9d61f1b0f` |
-| `deepseek-harness-0.2.1-rc.5-linux-loong64.tar.gz` | 403924032 B (≈385 MiB) | `52ed184113fd8e3aae3e6df7090a3b6aaa35e37c9352a5fcaf8ce4dbe8422e4c` |
+| `deepseek-harness_0.2.1~rc.5-1_loong64.deb` | 329709022 B (≈314 MiB) | `222090083b952cb8a87f807fb02fc161e67c161c654f0adb1f1f68cfdc7d04f8` |
+| `deepseek-harness-0.2.1-rc.5-linux-loong64.tar.gz` | 367853724 B (≈351 MiB) | `0a27a64c56f5e577d7d00dce2b0a89914d15929c316e06a9c6ed36191c159d83` |
 | `deepseek-harness.desktop` | 288 B | `37557123e839fe7099495f4738dcac66478a2fcc5c555ca698f32632f56c43eb` |
 | `install.sh` | 2035 B | `e0d73b2b9e3d140e64a83af9ee9c93a8b063f4b4f3890721a7cfe65cb3c7a2f7` |
 
-> ⚠️ 上表 `.deb` / `.tar.gz` 为 **rc.5 旧构建产物**（使用外来 wheel + 注入 blas-libs）。
-> 改用本机原生 wheel 并改为声明依赖后，需重打才会更新（见下方复现命令）；届时 sha256 会变化。
->
-> 新策略：`.deb` 由 `make-deb.sh` 把 16 个 Python 系统库 apt 包（见 MISSING-RUNTIME-LIBS.md）
-> 写进 `Depends`，**不再向产物注入任何系统库**；`.deb` 目标机 `dpkg -i` 后 `apt` 自动补齐，
-> `.tar.gz` 需目标机手动 `apt install`。
+> 本次 `.deb` 已反映**原生 wheel + 声明依赖**方案：`Installed-Size` 1080760 KB，
+> `Depends` 写入 **31 个包**（15 个 Electron 运行时库 + 16 个 Python 系统库），
+> 产物内 `python/lib/` 根部只有 `libpython3.12` / `libtcl*`，**无任何注入的 BLAS/XML 库**。
+> 校验：包内 `numpy/_core/_multiarray_umath*.so` 的 NEEDED 为 `libblas.so.3`（对应 `Depends: libblas3`），
+> `pandas/_libs/*.so` 不直链 BLAS。目标机 `dpkg -i` 后由 `apt` 自动补齐依赖；
+> `.tar.gz` 安装路径需目标机手动 `apt install` 同名包（见 MISSING-RUNTIME-LIBS.md）。
+
+## 避坑记录
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 打包阶段 `node-pty` 编译失败：`gyp ERR! ConnectTimeoutError` 下载 `node-v24.x-headers.tar.gz` | `prepare-dsh.ts` 把 `XDG_CACHE_HOME` 指向每次清空的构建临时目录，`node-gyp` 看不到 `~/.cache/node-gyp` 缓存；且 `npm_*` 环境变量被过滤；nodejs.org 不可达 | `build.sh` 导出 `NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node`（node-gyp 原生识别，未被过滤） |
+| `make-deb.sh` 在构建机自身 `Depends` 为空 | Deepin 25 `/etc/os-release` 仅 `ID=deepin`，无 `ID_LIKE=debian`，原 grep 漏判 | 改 `is_deb_family` 按 dpkg 家族判定（debian/ubuntu/deepin/raspbian/devuan/kali） |
+| pandas 构建 `generate_version.py --print` 失败 | `--no-build-isolation` 下 `versioneer` 未自动安装 | `build-wheels.sh` 预装 `versioneer`（及 meson/meson-python/Cython/pybind11） |
+
 
 ## 复现命令
 
