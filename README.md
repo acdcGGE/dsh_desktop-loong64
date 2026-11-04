@@ -155,14 +155,36 @@ cd ../dsh_desktop-loong64
 
 ---
 
-## 8. 跟踪上游更新
+## 8. 跟踪上游更新（含 rc 预发布）
 
 配置集中在 `upstream.conf`（记录官方仓库、本地已验证版本/commit，由 `sync-upstream.sh --apply` 自动回写）。
 
+上游当前以**预发布**节奏迭代（`rc.N`、`alpha.N`），`releases/latest` 对这类版本返回空，按时间取 `tags[0]` 也会错序（`rc.10` 会比 `rc.6` 旧）。因此 `check-upstream.sh` 会：
+
+- 同时拉 `releases`（含 pre-release）与 `tags`，按**语义化版本号**取最大值，`rc`/`alpha`/`beta`/`pre` 分别标注；
+- 分别给出「上游最新（含预发布）」「上游最新 rc」「上游最新正式版」，并列出最近几个预发布；
+- 与 `upstream.conf` 的 `LOCAL_VERSION` 比较，判定是否有更新；
+- 回写 `LAST_CHECKED` / `LAST_UPSTREAM_VERSION` / `LAST_SEEN_RC`。
+
 ```bash
-./check-upstream.sh                 # 比对 GitHub 最新 tag 与本地版本
+./check-upstream.sh                    # 完整报告（含本地 git 比对、参考仓库）
+./check-upstream.sh --quiet            # 仅在有更新时输出一行 (适合 cron)
+./check-upstream.sh --json             # 机器可读 JSON (含 latest/latest_kind/latest_rc/update)
+./check-upstream.sh --sync             # 发现更新直接调 sync-upstream.sh --apply
+./check-upstream.sh --fixtures DIR     # 离线调试: 从 DIR 读 releases.json / tags.json
+```
+
+**退出码**：`0` 已是最新 / 无法判定；`10` 上游有更新可用。便于在脚本里分支：
+
+```bash
+if ./check-upstream.sh --quiet; then echo "无更新"; else echo "有更新，准备同步"; fi
+# 或每日定时：
+# 0 9 * * * cd /path/to/dsh_desktop-loong64 && ./check-upstream.sh --quiet
+```
+
+```bash
 ./sync-upstream.sh --apply --yes --with-tarball   # fetch → checkout → 打补丁 → 构建 → 打包 → 回写
-./sync-upstream.sh --apply --tag dsh-v0.2.2      # 指定目标 tag
+./sync-upstream.sh --apply --tag dsh-v0.2.2-alpha.3   # 指定目标 tag
 ```
 
 > `sync-upstream.sh` 改动的是上游源码工作树与构建产物，**不会删除 `dist/` 下的历史包**。

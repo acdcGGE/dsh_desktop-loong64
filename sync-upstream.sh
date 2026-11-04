@@ -6,7 +6,7 @@
 #                     不修改任何文件、不重新构建。
 #
 # 真正执行:  ./sync-upstream.sh --apply [--tag <tag>] [--yes] [--with-tarball]
-#   --tag <tag>      指定要切换到的上游 tag (默认: 最新 release)
+#   --tag <tag>      指定要切换到的上游 tag (默认: 按语义化版本取上游最新, 含 rc/alpha 预发布)
 #   --yes            跳过"确认"交互 (用于自动化/CI)
 #   --with-tarball   额外产出 tar.gz 可分发包 (默认不产, 见下方说明)
 #   --formats "deb pkg"  覆盖 upstream.conf 的 PACKAGE_FORMATS
@@ -76,18 +76,29 @@ echo "[产出] 包格式: ${FORMATS:-（无）}$([[ "$WITH_TARBALL" == 1 ]] && e
 echo
 
 # ---- 确定目标 tag ----
+# 上游以预发布(rc/alpha)为主, releases/latest 会返回空, 而 tags?per_page=1 按提交时间排序,
+# 遇到 rc.6 / rc.10 这种会取错。故统一走 check-upstream.sh 的语义化版本排序结果。
 API="https://api.github.com"
 UA="dsh-desktop-loong64-updater"
 if [[ -z "$TARGET_TAG" ]]; then
-  echo "==> 查询最新 Release ..."
-  rel_json="$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" \
-    -H "User-Agent: $UA" "$API/repos/$REPO/releases/latest" 2>/dev/null)"
-  TARGET_TAG="$(printf '%s' "$rel_json" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null)"
+  if [[ -x "$HERE/check-upstream.sh" ]]; then
+    echo "==> 按语义化版本查询上游最新(含预发布) ..."
+    TARGET_TAG="$("$HERE/check-upstream.sh" --json 2>/dev/null \
+      | python3 -c 'import sys,json;print(json.load(sys.stdin).get("latest",""))' 2>/dev/null)"
+    [[ -n "$TARGET_TAG" ]] && echo "    上游最新: $TARGET_TAG"
+  fi
+  # 兜底: check-upstream.sh 不可用时走原来的接口 (结果可能不含预发布)
   if [[ -z "$TARGET_TAG" ]]; then
-    echo "    无 Latest Release（多为预发布），改用最新 tag ..."
-    tags_json="$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" \
-      -H "User-Agent: $UA" "$API/repos/$REPO/tags?per_page=1" 2>/dev/null)"
-    TARGET_TAG="$(printf '%s' "$tags_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0].get("name",""))' 2>/dev/null)"
+    echo "==> 查询最新 Release ..."
+    rel_json="$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" \
+      -H "User-Agent: $UA" "$API/repos/$REPO/releases/latest" 2>/dev/null)"
+    TARGET_TAG="$(printf '%s' "$rel_json" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null)"
+    if [[ -z "$TARGET_TAG" ]]; then
+      echo "    无 Latest Release（多为预发布），改用最新 tag ..."
+      tags_json="$(curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" \
+        -H "User-Agent: $UA" "$API/repos/$REPO/tags?per_page=1" 2>/dev/null)"
+      TARGET_TAG="$(printf '%s' "$tags_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0].get("name",""))' 2>/dev/null)"
+    fi
   fi
   if [[ -z "$TARGET_TAG" ]]; then
     echo "错误: 无法获取最新 Release/Tag (GitHub API 不可达或限流)" >&2
