@@ -68,8 +68,9 @@ python3 "$HERE/check-runtime-libs.py"
 # 8) 打包: 原生轮子链接 /usr/lib 下的系统库, 构建机已装好, 无需 LD_LIBRARY_PATH 注入
 ./package-desktop.sh
 
-# 9) 产出分发包 (.deb 自带 Depends 声明, 不再注入任何系统库)
+# 9) 产出分发包 (.deb / .pkg.tar.zst 均自带依赖声明, 不再注入任何系统库)
 ./make-deb.sh
+./make-pkg.sh
 ./make-dist.sh
 
 echo

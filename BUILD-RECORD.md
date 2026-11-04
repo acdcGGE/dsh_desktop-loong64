@@ -77,6 +77,7 @@ wheel），链接构建机自己的系统库。`lock.json` 的 `targets.linux-lo
 | --- | --- | --- |
 | `deepseek-harness_0.2.1~rc.5-1_loong64.deb` | 329709022 B (≈314 MiB) | `222090083b952cb8a87f807fb02fc161e67c161c654f0adb1f1f68cfdc7d04f8` |
 | `deepseek-harness-0.2.1-rc.5-linux-loong64.tar.gz` | 367853724 B (≈351 MiB) | `0a27a64c56f5e577d7d00dce2b0a89914d15929c316e06a9c6ed36191c159d83` |
+| `deepseek-harness-0.2.1_rc.5-1-loongarch64.pkg.tar.zst` | 293270374 B (≈280 MiB) | `d45dd7c49cee41309a55c229bdc4d63ed430e7d6ab290c5799baa9235c9acc9a` |
 | `deepseek-harness.desktop` | 288 B | `37557123e839fe7099495f4738dcac66478a2fcc5c555ca698f32632f56c43eb` |
 | `install.sh` | 2035 B | `e0d73b2b9e3d140e64a83af9ee9c93a8b063f4b4f3890721a7cfe65cb3c7a2f7` |
 
@@ -87,6 +88,33 @@ wheel），链接构建机自己的系统库。`lock.json` 的 `targets.linux-lo
 > `pandas/_libs/*.so` 不直链 BLAS。目标机 `dpkg -i` 后由 `apt` 自动补齐依赖；
 > `.tar.gz` 安装路径需目标机手动 `apt install` 同名包（见 MISSING-RUNTIME-LIBS.md）。
 
+### Arch 包（`pacman -U`）
+
+同一份 `linux-loong64-unpacked` 由 `make-pkg.sh` 打成 `.pkg.tar.zst`，与 `.deb` 同源同版本，
+仅依赖声明换成 **Arch 包名**（由同一份 SONAME 清单映射）：
+
+| Debian/Deepin 包 | Arch 包 | 提供 |
+| --- | --- | --- |
+| `libblas3` | `blas` | `libblas.so.3`（并传递带入 `libgfortran`） |
+| `liblapack3` | `lapack` | `liblapack.so.3` |
+| `libxml2` | `libxml2` | `libxml2.so.2` |
+| `libxslt1.1` | `libxslt` | `libxslt.so.1` + `libexslt.so.0` |
+| `libfreetype6` | `freetype2` | `libfreetype.so.6` |
+| `libjpeg62-turbo` | `libjpeg-turbo` | `libjpeg.so.62` |
+| `libimagequant0` | `libimagequant` | `libimagequant.so.0` |
+| `libraqm0` | `libraqm` | `libraqm.so.0` |
+| `liblcms2-2` | `lcms2` | `liblcms2.so.2` |
+| `libtiff6` | `libtiff` | `libtiff.so.6` |
+| `libwebp7` / `libwebpdemux2` / `libwebpmux3` | `libwebp` | `libwebp.so.7` 等三个 |
+| `libxcb1` | `libxcb` | `libxcb.so.1` |
+| `zlib1g` | `zlib` | `libz.so.1` |
+
+`.PKGINFO` 共 **28 个 `depend`**（15 个 Electron 运行时 + 13 个 Python 系统库）。
+包结构校验：`zstd -t` 通过；`.PKGINFO` 为归档第一个成员、`.INSTALL` 第二；
+`chrome-sandbox` 权限 `4755`；`/usr/bin/deepseek-harness` 符号链接、`.desktop`、图标齐全；
+全包无组/其他可写条目；`python/lib/` 根部同样无注入库。
+本机无 `pacman`，故未做安装实测（依赖名按 Arch 官方包名给出）。
+
 ## 避坑记录
 
 | 现象 | 原因 | 处理 |
@@ -94,6 +122,8 @@ wheel），链接构建机自己的系统库。`lock.json` 的 `targets.linux-lo
 | 打包阶段 `node-pty` 编译失败：`gyp ERR! ConnectTimeoutError` 下载 `node-v24.x-headers.tar.gz` | `prepare-dsh.ts` 把 `XDG_CACHE_HOME` 指向每次清空的构建临时目录，`node-gyp` 看不到 `~/.cache/node-gyp` 缓存；且 `npm_*` 环境变量被过滤；nodejs.org 不可达 | `build.sh` 导出 `NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node`（node-gyp 原生识别，未被过滤） |
 | `make-deb.sh` 在构建机自身 `Depends` 为空 | Deepin 25 `/etc/os-release` 仅 `ID=deepin`，无 `ID_LIKE=debian`，原 grep 漏判 | 改 `is_deb_family` 按 dpkg 家族判定（debian/ubuntu/deepin/raspbian/devuan/kali） |
 | pandas 构建 `generate_version.py --print` 失败 | `--no-build-isolation` 下 `versioneer` 未自动安装 | `build-wheels.sh` 预装 `versioneer`（及 meson/meson-python/Cython/pybind11） |
+| `make-pkg.sh` 在非 Arch 宿主上秒退（无任何输出） | `CARCH=$(grep /etc/makepkg.conf … \| cut …)`：Deepin 上该文件不存在，`pipefail` 使 grep 的退出码 1 直接终止脚本 | 取值处加 `{ … \|\| true; }` 容错，缺失时回落 `uname -m` |
+| Arch 包内目录 775 / 文件 664 | 构建宿主 umask 002，`cp -a` 保留了组可写位 | 在所有文件生成之后 `chmod -R a+rX,go-w`（位于 `.desktop`/图标/symlink 创建之后，`chrome-sandbox` 的 4755 不受影响） |
 
 
 ## 复现命令
@@ -102,7 +132,7 @@ wheel），链接构建机自己的系统库。`lock.json` 的 `targets.linux-lo
 cd dsh_desktop-loong64
 # 1) 本机重编 4 个原生 wheel (若尚未)
 ./build-wheels.sh
-# 2) 完整构建 + 打包 (会自动 check-runtime-libs 并声明 Depends)
+# 2) 完整构建 + 打包 (会自动 check-runtime-libs, 产出 deb/pkg.tar.zst/tar.gz 三套)
 DSH_SRC_TREE=../dsh DSH_DESKTOP_ELECTRON_DIST=../electron-loong64/electron-43.7.7 \
   ./build.sh
 sha256sum dist/* > dist/SHA256SUMS

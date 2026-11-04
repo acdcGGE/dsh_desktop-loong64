@@ -41,7 +41,7 @@
 - **Electron 二进制**：[`darkyzhou/electron-loong64`](https://github.com/darkyzhou/electron-loong64) 的 **v43.7.7**，解压到 `electron-loong64/electron-43.7.7/`。通过 `DSH_DESKTOP_ELECTRON_DIST` 指定。
 - **龙芯 npm 镜像**：`https://registry.loongnix.cn:5873`——loong64 平台原生包（含 rolldown/lightningcss 的 loong64 绑定）仅此源提供。脚本默认已设置，可用 `DSH_DESKTOP_NPM_REGISTRY` 覆盖。
 - **编译依赖**：`gcc` / `make` / `python3` / `cargo`（部分原生模块用 node-gyp 编译）。
-- **运行时系统库（关键！）**：4 个 Python 原生 wheel（`numpy` / `pandas` / `Pillow` / `lxml`）在**构建机本机从源码编译**（`build-wheels.sh`），链接的是构建机自己的系统库（`libblas3` / `liblapack3` / `libxml2` / `libxslt1.1` / `libfreetype6` / `libjpeg62-turbo` / `libimagequant0` / `libraqm0` / `liblcms2-2` / `libtiff6` / `libwebp7` / `libwebpdemux2` / `libwebpmux3` / `libxcb1` / `zlib1g`），这些**不会随 wheel 分发**。本仓库**不再搬运任何系统库**：`.deb` 由 `make-deb.sh` 把这些包写进 `Depends`，目标机 `dpkg -i` 后 `apt` 自动补齐；`.tar.gz` 则需目标机手动 `apt install`（命令见 **[`MISSING-RUNTIME-LIBS.md`](./MISSING-RUNTIME-LIBS.md)**）。构建机需先装好这些包，`build.sh` 会调用 `check-runtime-libs.py` 校验。
+- **运行时系统库（关键！）**：4 个 Python 原生 wheel（`numpy` / `pandas` / `Pillow` / `lxml`）在**构建机本机从源码编译**（`build-wheels.sh`），链接的是构建机自己的系统库（`libblas3` / `liblapack3` / `libxml2` / `libxslt1.1` / `libfreetype6` / `libjpeg62-turbo` / `libimagequant0` / `libraqm0` / `liblcms2-2` / `libtiff6` / `libwebp7` / `libwebpdemux2` / `libwebpmux3` / `libxcb1` / `zlib1g`），这些**不会随 wheel 分发**。本仓库**不再搬运任何系统库**：`.deb` 由 `make-deb.sh` 把这些包写进 `Depends`，目标机 `dpkg -i` 后 `apt` 自动补齐；`.pkg.tar.zst` 由 `make-pkg.sh` 写入对应的 **Arch 包名**（`blas` / `lapack` / `libxml2` / `libxslt` / `freetype2` / `libjpeg-turbo` / `libimagequant` / `libraqm` / `lcms2` / `libtiff` / `libwebp` / `libxcb` / `zlib`），`pacman -U` 时会一并安装；`.tar.gz` 则需目标机手动 `apt install`（命令见 **[`MISSING-RUNTIME-LIBS.md`](./MISSING-RUNTIME-LIBS.md)**）。构建机需先装好这些包，`build.sh` 会调用 `check-runtime-libs.py` 校验。
 - **打包依赖**：
   - `.deb`：`dpkg-deb` + `fakeroot`
   - `.pkg.tar.zst`：`bsdtar`（libarchive）+ `zstd`
@@ -114,8 +114,8 @@ pnpm run build:desktop
 cd ../dsh_desktop-loong64
 ./package-desktop.sh           # 产出 linux-loong64-unpacked
 ./make-deb.sh                  # dist/*.deb
+./make-pkg.sh                  # dist/*.pkg.tar.zst (Arch 系, 需 bsdtar + zstd)
 ./make-dist.sh                 # dist/*.tar.gz (+ install.sh / .desktop / SHA256SUMS)
-# ./make-pkg.sh                # 如需 Arch 包
 ```
 
 > **顺序陷阱**：`pnpm install` 会依据 lockfile 重建 `node_modules`，把我手动放入的 loong64 绑定剪除。务必在每次 `pnpm install` **之后**再跑 `install-loong64-bindings.sh`。
@@ -129,7 +129,7 @@ cd ../dsh_desktop-loong64
 | 文件 | 说明 |
 | --- | --- |
 | `deepseek-harness_<ver>-1_loong64.deb` | Debian/Ubuntu/统信/麒麟 安装包（`dpkg -i`） |
-| `deepseek-harness-<ver>-1-loong64.pkg.tar.zst` | Arch 系安装包（`pacman -U`） |
+| `deepseek-harness-<pkgver>-<pkgrel>-<carch>.pkg.tar.zst` | Arch 系安装包（`pacman -U`）。`pkgver` 中的 `-` 会转 `_`（如 `0.2.1_rc.5-1`）；`carch` 取自宿主的 `makepkg.conf` 或 `uname -m`，可用 `CARCH=... ./make-pkg.sh` 覆盖 |
 | `deepseek-harness-<ver>-linux-loong64.tar.gz` | 通用分发包，含 `install.sh` / `.desktop` / `SHA256SUMS` |
 
 包内容（三者同源，来自同一个 `linux-loong64-unpacked`）：
