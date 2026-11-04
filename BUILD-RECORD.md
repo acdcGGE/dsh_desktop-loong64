@@ -52,11 +52,18 @@
 
 ## 产物（SHA256）
 
-> 以下由 `sha256sum dist/*` 在构建完成后填写：
+> 构建于 2026-11-04 08:32，产物见 `dist/`，各文件 SHA256 见 `dist/SHA256SUMS`。
 
-```
-（待构建完成填充）
-```
+| 文件 | 大小 | SHA256 |
+| --- | --- | --- |
+| `deepseek-harness_0.2.1~rc.5-1_loong64.deb` | 364821482 B (≈348 MiB) | `0b64060f496c76b602a6e7e0eeba9186efd0786ed8b3d0e062ee09f9d61f1b0f` |
+| `deepseek-harness-0.2.1-rc.5-linux-loong64.tar.gz` | 403924032 B (≈385 MiB) | `52ed184113fd8e3aae3e6df7090a3b6aaa35e37c9352a5fcaf8ce4dbe8422e4c` |
+| `deepseek-harness.desktop` | 288 B | `37557123e839fe7099495f4738dcac66478a2fcc5c555ca698f32632f56c43eb` |
+| `install.sh` | 2035 B | `e0d73b2b9e3d140e64a83af9ee9c93a8b063f4b4f3890721a7cfe65cb3c7a2f7` |
+
+> 说明：Python 运行时所需的 libcblas / libxml2 等系统库已在打包时注入
+> `linux-loong64-unpacked/resources/runtime/primary-runtime/dependencies/python/lib`，
+> 故 `.deb` / `.tar.gz` 为完整自包含包，目标机无需额外安装 BLAS/XML 等依赖（见 MISSING-RUNTIME-LIBS.md）。
 
 ## 复现命令
 
