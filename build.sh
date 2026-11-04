@@ -54,9 +54,23 @@ python3 "$HERE/install-loong64-bindings.sh"
 pnpm run build:lib
 pnpm run build:desktop
 
-# 7) 打包
+# 7) 解析并取出 Python 运行时所需的系统原生库 (填入 blas-libs/)
+#    新机器需先按 MISSING-RUNTIME-LIBS.md 用 apt 装好这些库, 本步从 /usr/lib 取出。
 cd "$HERE"
+python3 "$HERE/resolve-runtime-libs.py"
+
+# 8) 打包: 用 blas-libs 作为 LD_LIBRARY_PATH, 让 prepare:runtime 冒烟测试能找到系统库
+BLAS_LIBS="$HERE/blas-libs"
+export LD_LIBRARY_PATH="$BLAS_LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ./package-desktop.sh
+
+# 9) 把 blas-libs 注入最终解包目录的 python runtime, 使产物自带库、开箱即用
+UNPACKED="$(ls -d "$DSH"/apps/desktop/.desktop-build/targets/linux-loong64/*unpacked 2>/dev/null | head -1)"
+if [[ -n "$UNPACKED" ]]; then
+  while IFS= read -r PYLIB; do
+    cp -a "$BLAS_LIBS"/. "$PYLIB/" 2>/dev/null || true
+  done < <(find "$UNPACKED" -type d -path '*primary-runtime/dependencies/python/lib' 2>/dev/null)
+fi
 ./make-deb.sh
 ./make-dist.sh
 

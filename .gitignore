@@ -16,3 +16,8 @@
 # ===== 会话级临时脚本（非仓库内容）=====
 /build-rc*.sh
 /resume*.sh
+/finalize*.sh
+/fetch-runtime-assets.sh
+
+# ===== 构建机本地库缓存（由 resolve-runtime-libs.py 生成，非源码）=====
+/blas-libs/
