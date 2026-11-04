@@ -19,6 +19,17 @@
 
 构建产物（`.deb` / `.pkg.tar.zst` / `.tar.gz`）应作为 **GitHub Release 资产** 发布，**不要**提交进 git（已被 `.gitignore` 排除）。
 
+**下载最新构建**：[Releases · v0.2.1-rc.5](https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.1-rc.5)
+
+```bash
+# Debian / Deepin / UOS
+sudo apt install ./deepseek-harness_0.2.1.rc.5-1_loong64.deb
+# Arch Linux
+sudo pacman -U deepseek-harness-0.2.1_rc.5-1-loongarch64.pkg.tar.zst
+```
+
+> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.1.rc.5-1`，与 `SHA256SUMS` 中的 `0.2.1~rc.5-1` 仅差这一个字符；包内容与版本号不受影响。
+
 ---
 
 ## 2. 为什么需要这个工具包（背景）
