@@ -144,6 +144,28 @@ fi
 echo "==> [1/11] git fetch --tags"
 git -C "$LOCAL_DIR" fetch --tags origin || { echo "fetch 失败"; exit 1; }
 
+# 在动工作树之前做只读兼容性预检: 上游每个 rc 都可能重构代码块, 以前要等
+# [3/11] apply-adaption 才报锚点失配, 那时工作树已经 checkout + stash, 处于半适配
+# 状态。这里用 git archive 把目标 tag 导出到临时目录, 验证失败就直接退出,
+# 工作树和 stash 保持原样。
+echo "    补丁兼容性预检 ($TARGET_TAG, 只读, 不改工作树)"
+PRECHECK_DIR="$(mktemp -d)"
+trap 'rm -rf "$PRECHECK_DIR"' EXIT
+git -C "$LOCAL_DIR" archive "$TARGET_TAG" | tar -x -C "$PRECHECK_DIR" \
+  || { echo "错误: 无法导出 $TARGET_TAG 源码用于预检" >&2; exit 1; }
+if ! "$HERE/apply-adaption.sh" --check "$PRECHECK_DIR" > /tmp/dsh-adaption-check.log 2>&1; then
+  cat /tmp/dsh-adaption-check.log >&2
+  echo "错误: 适配补丁与 $TARGET_TAG 不兼容, 已中止; 工作树未做任何改动。" >&2
+  echo "      按上面的清单更新 apply-adaption.sh 的锚点后重试。" >&2
+  exit 1
+fi
+tail -1 /tmp/dsh-adaption-check.log
+if [[ "${DSH_SYNC_PRECHECK_ONLY:-0}" == 1 ]]; then
+  echo "==> 仅预检模式: 工作树/stash 均未改动, 退出"
+  exit 0
+fi
+rm -rf "$PRECHECK_DIR"
+
 echo "==> [2/11] checkout $TARGET_TAG"
 # 工作树上有 loong64 适配补丁造成的本地修改, 直接 checkout 会被 git 拒绝。
 # 适配补丁在 [3/6] 会重新施加, 因此这里先把改动存进 stash (可恢复, 非破坏性)。

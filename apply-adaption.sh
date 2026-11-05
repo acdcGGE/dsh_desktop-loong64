@@ -2,7 +2,11 @@
 # =============================================================================
 # dsh_desktop-loong64 —— 把 deepseek-harness 官方仓库适配到 Linux LoongArch64
 #
-# 用法:  ./apply-adaption.sh [dsh 仓库路径]     (默认: 同级的 dsh 目录)
+# 用法:  ./apply-adaption.sh [--check] [dsh 仓库路径]
+#          --check   只读预检: 在内存里按顺序模拟全部补丁, 报告所有失配锚点,
+#                    不写入任何文件、不创建 shim。失败退出码 10。
+#                    sync-upstream.sh 会在 checkout 之前用它验证目标 tag。
+#          默认路径: 同级的 dsh 目录
 #
 # 补丁清单:
 #   P1  package.json (root)          移除 lefthook postinstall (无 loong64 二进制)
@@ -16,17 +20,32 @@
 #
 # 所有修改幂等: 每个补丁有独立 marker, 重复执行安全。
 # 上游文件均以 "// loong64-adaption[Pn]" 注释标记。
+#
+# 上游跨版本兼容: patch() 的 old 允许传 [(old, new), ...] 候选列表。上游重构
+# 代码块时, 把新旧两种写法都列为候选, 按顺序试第一个命中的, 因此同一份配方
+# 可同时适配多个 tag (已验证 dsh-v0.2.1-rc.5 与 dsh-v0.2.2-rc.1)。
+# 升级上游后先跑: ./apply-adaption.sh --check <目标 tag 导出的源码目录>
 # =============================================================================
 set -euo pipefail
 
-REPO="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dsh}"
+CHECK_ONLY=0
+REPO=""
+for arg in "$@"; do
+  case "$arg" in
+    --check) CHECK_ONLY=1 ;;
+    -*) echo "错误: 未知参数 $arg" >&2; exit 2 ;;
+    *) REPO="$arg" ;;
+  esac
+done
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/dsh}"
 ADAPTION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ADAPTION_CHECK="$CHECK_ONLY"
 
 if [[ ! -f "$REPO/package.json" || ! -d "$REPO/apps/desktop" ]]; then
   echo "错误: $REPO 不是 deepseek-harness 仓库根目录" >&2
   exit 1
 fi
-echo "==> 适配仓库: $REPO"
+echo "==> 适配仓库: $REPO$([[ "$CHECK_ONLY" == 1 ]] && echo '  (只读预检)')"
 
 python3 - "$REPO" "$ADAPTION_DIR" <<'PYEOF'
 import json, re, sys, os
@@ -34,34 +53,54 @@ import json, re, sys, os
 repo = sys.argv[1]
 adaption = sys.argv[2]
 
-def read(p):
-    with open(os.path.join(repo, p), encoding='utf-8') as f: return f.read()
-def write(p, s):
-    with open(os.path.join(repo, p), 'w', encoding='utf-8') as f: f.write(s)
-def patch(pid, p, old, new, all_occurrences=False):
-    """幂等替换: 已打过(含 marker '[pid]' 或 new 已存在)则跳过; old 找不到则报错
+CHECK_ONLY = os.environ.get('ADAPTION_CHECK') == '1'
+_mem = {}        # --check 模式: 内存文件视图, 让依赖前面补丁的锚点能被正确模拟
+_failures = []   # --check 模式: 累积所有失配, 而不是遇到第一个就退出
 
-    all_occurrences=True —— 上游同一代码段在多处合法出现(如两份 JSDoc @returns
-    拥有相同的 target 联合类型)时, 全部替换。此时 new 不含 marker, 幂等性由
-    "new 已存在则跳过" 保证。
+def read(p):
+    if CHECK_ONLY and p in _mem:
+        return _mem[p]
+    with open(os.path.join(repo, p), encoding='utf-8') as f:
+        return f.read()
+def write(p, s):
+    if CHECK_ONLY:
+        _mem[p] = s
+    else:
+        with open(os.path.join(repo, p), 'w', encoding='utf-8') as f:
+            f.write(s)
+
+def patch(pid, p, old, new=None, all_occurrences=False):
+    """幂等替换。old 可以是字符串, 也可以是 [(old, new), ...] 候选列表:
+    上游重构代码块时按顺序试每个候选, 命中的那个决定写入内容, 因此同一个补丁
+    可同时兼容多个上游 tag (例如 rc.5 的三元写法与 rc.1 的查表写法)。
+
+    all_occurrences=True —— 同一代码段在多处合法出现时全部替换; 此时 new 不含
+    marker, 幂等性由 "new 已存在则跳过" 保证。
     """
+    variants = [(old, new)] if isinstance(old, str) else list(old)
     marker = f'loong64-adaption[{pid}]'
     s = read(p)
     # new 已存在说明此前打过(部分补丁的目标文本不含 marker, 只能整体比对)
-    if marker in s or new in s:
+    if marker in s or any(n in s for _, n in variants):
         print(f"  [跳过] {p} [{pid}] 已适配")
         return
-    cnt = s.count(old)
-    if all_occurrences:
-        if cnt < 1:
-            raise SystemExit(f"错误: {p} [{pid}] 中未找到预期代码段")
-        write(p, s.replace(old, new))
-        print(f"  [打补丁] {p} [{pid}] (共 {cnt} 处)")
+    counts = []
+    for i, (o, n) in enumerate(variants, 1):
+        cnt = s.count(o)
+        ok = cnt >= 1 if all_occurrences else cnt == 1
+        if ok:
+            write(p, s.replace(o, n))
+            tag = f"  [变体 {i}/{len(variants)}]" if len(variants) > 1 else ""
+            extra = f" (共 {cnt} 处)" if all_occurrences else ""
+            print(f"  [打补丁] {p} [{pid}]{extra}{tag}")
+            return
+        counts.append(cnt)
+    msg = f"错误: {p} [{pid}] 的 {len(variants)} 个候选全部失配 (各出现 {counts} 次)"
+    if CHECK_ONLY:
+        _failures.append((pid, p, msg))
+        print(f"  [失配] {p} [{pid}] 各候选出现次数 {counts}")
         return
-    if cnt != 1:
-        raise SystemExit(f"错误: {p} [{pid}] 中预期代码段出现 {cnt} 次 (需要恰好 1 次)")
-    write(p, s.replace(old, new))
-    print(f"  [打补丁] {p} [{pid}]")
+    raise SystemExit(msg)
 
 # ---------------------------------------------------------------- P1 根 package.json
 print("P1 package.json: 移除 lefthook postinstall")
@@ -94,15 +133,16 @@ patch('P3a', 'apps/desktop/scripts/desktop-build-paths.mjs',
 """const SUPPORTED_TARGETS = new Set(['mac-arm64', 'mac-x64', 'win-x64'])""",
 """const SUPPORTED_TARGETS = new Set(['mac-arm64', 'mac-x64', 'win-x64', 'linux-loong64'])  // loong64-adaption[P3a]: 新增龙芯目标""")
 
-patch('P3b', 'apps/desktop/scripts/desktop-build-paths.mjs',
-"""export function desktopTargetPlatform(target) {
+patch('P3b', 'apps/desktop/scripts/desktop-build-paths.mjs', [
+  # 上游 rc.5: 三元表达式直接 return
+  ("""export function desktopTargetPlatform(target) {
   assertSupportedTarget(target)
   return {
     platform: /** @type {'darwin' | 'win32'} */ (target === 'win-x64' ? 'win32' : 'darwin'),
     arch: /** @type {'arm64' | 'x64'} */ (target === 'mac-arm64' ? 'arm64' : 'x64'),
   }
 }""",
-"""export function desktopTargetPlatform(target) {
+   """export function desktopTargetPlatform(target) {
   assertSupportedTarget(target)
   // loong64-adaption[P3b]: Linux LoongArch64 目标
   if (target === 'linux-loong64') {
@@ -115,7 +155,16 @@ patch('P3b', 'apps/desktop/scripts/desktop-build-paths.mjs',
     platform: /** @type {'darwin' | 'win32'} */ (target === 'win-x64' ? 'win32' : 'darwin'),
     arch: /** @type {'arm64' | 'x64'} */ (target === 'mac-arm64' ? 'arm64' : 'x64'),
   }
-}""")
+}"""),
+  # 上游 rc.1: 改成 targets 查表对象; 不登记 loong64 会静默返回 undefined
+  ("""    'win-x64': { platform: 'win32', arch: 'x64' },
+  })
+  return targets[target]""",
+   """    'win-x64': { platform: 'win32', arch: 'x64' },
+    'linux-loong64': { platform: 'linux', arch: 'loong64' },  // loong64-adaption[P3b]
+  })
+  return targets[target]"""),
+])
 
 # ---------------------------------------------------------------- P4 package-target.ts
 print("P4 package-target.ts: TARGETS 增加 linux-loong64")
@@ -247,12 +296,20 @@ patch('P6c', 'scripts/primary-runtime/prepare.ts',
   return downloadPrimaryRuntimeAsset(`${pythonBase}/${pythonRelease}/${encodeURIComponent(filename)}`, artifact.pythonSha256, cache)
 }""")
 
-patch('P6d', 'scripts/primary-runtime/prepare.ts',
-"""      platform: target === 'win-x64' ? 'win32' : target.startsWith('linux-') ? 'linux' : 'darwin',
+patch('P6d', 'scripts/primary-runtime/prepare.ts', [
+  # 上游 rc.5: 写进对象的 platform/arch 属性 (带逗号)
+  ("""      platform: target === 'win-x64' ? 'win32' : target.startsWith('linux-') ? 'linux' : 'darwin',
       arch: target.endsWith('-arm64') ? 'arm64' : 'x64',""",
-"""      platform: target === 'win-x64' ? 'win32' : target.startsWith('linux-') ? 'linux' : 'darwin',
+   """      platform: target === 'win-x64' ? 'win32' : target.startsWith('linux-') ? 'linux' : 'darwin',
       // loong64-adaption[P6d]: 增加 loong64 架构判定
-      arch: target.endsWith('-arm64') ? 'arm64' : target.endsWith('-loong64') ? 'loong64' : 'x64',""")
+      arch: target.endsWith('-arm64') ? 'arm64' : target.endsWith('-loong64') ? 'loong64' : 'x64',"""),
+  # 上游 rc.1: 改成两个 const 局部变量
+  ("""    const platform = target === 'win-x64' ? 'win32' : target.startsWith('linux-') ? 'linux' : 'darwin'
+    const arch = target.endsWith('-arm64') ? 'arm64' : 'x64'""",
+   """    const platform = target === 'win-x64' ? 'win32' : target.startsWith('linux-') ? 'linux' : 'darwin'
+    // loong64-adaption[P6d]: 增加 loong64 架构判定
+    const arch = target.endsWith('-arm64') ? 'arm64' : target.endsWith('-loong64') ? 'loong64' : 'x64'"""),
+])
 
 # ---------------------------------------------------------------- P7 project-manager.ts (ripgrep shim)
 print("P7 project-manager.ts: 注入 @vscode/ripgrep-linux-loong64 shim")
@@ -320,39 +377,46 @@ patch('P10', 'native/system/scripts/build.ts',
 
 # ---------------------------------------------------------------- P11 package-target.ts 打包 loong64 平台包
 print("P11 package-target.ts: 将 loong64 平台包一并打包进 packedLandlock")
+# 上游 rc.5 用 execute() / 顶层 2 空格缩进; rc.1 重命名为 executePreparation()
+# 并把打包段挪进 if 块 (4 空格缩进)。函数名与缩进各出两种, 共 4 个候选。
+_P11_HEAD = """@IND@await @FN@([
+@IND@  '--dir',
+@IND@  'native/system/packages/entry',
+@IND@  'pack',
+@IND@  '--pack-destination',
+@IND@  buildPaths.packedLandlock,
+@IND@], buildEnv, REPOSITORY_ROOT)"""
+_P11_TAIL = """
+@IND@// loong64-adaption[P11]: 平台包未发布到任何 registry, 随 entry 一并打进本地包集,
+@IND@// 由 runtime 项目的 overrides 强制解析到该 tarball
+@IND@if (target.name === 'linux-loong64') {
+@IND@  await @FN@([
+@IND@    '--dir',
+@IND@    'native/system/packages/linux-loong64',
+@IND@    'pack',
+@IND@    '--pack-destination',
+@IND@    buildPaths.packedLandlock,
+@IND@  ], buildEnv, REPOSITORY_ROOT)
+@IND@}"""
+def _p11(fn, ind):
+    head = _P11_HEAD.replace('@FN@', fn).replace('@IND@', ind)
+    return (head, head + _P11_TAIL.replace('@FN@', fn).replace('@IND@', ind))
+
 patch('P11', 'apps/desktop/scripts/package-target.ts',
-"""  await execute([
-    '--dir',
-    'native/system/packages/entry',
-    'pack',
-    '--pack-destination',
-    buildPaths.packedLandlock,
-  ], buildEnv, REPOSITORY_ROOT)""",
-"""  await execute([
-    '--dir',
-    'native/system/packages/entry',
-    'pack',
-    '--pack-destination',
-    buildPaths.packedLandlock,
-  ], buildEnv, REPOSITORY_ROOT)
-  // loong64-adaption[P11]: 平台包未发布到任何 registry, 随 entry 一并打进本地包集,
-  // 由 runtime 项目的 overrides 强制解析到该 tarball
-  if (target.name === 'linux-loong64') {
-    await execute([
-      '--dir',
-      'native/system/packages/linux-loong64',
-      'pack',
-      '--pack-destination',
-      buildPaths.packedLandlock,
-    ], buildEnv, REPOSITORY_ROOT)
-  }""")
+      [_p11(fn, ind) for fn in ('execute', 'executePreparation')
+                     for ind in ('  ', '    ')])
 
 # ---------------------------------------------------------------- P12 prepare.ts 本地轮子 file:// 支持
 print("P12 primary-runtime/prepare.ts: file:// 本地轮子直读 + manifest python 版本按 target")
-patch('P12a', 'scripts/primary-runtime/prepare.ts',
-"""import { dirname, join, resolve } from 'node:path'""",
-"""import { fileURLToPath } from 'node:url'  // loong64-adaption[P12a]
-import { dirname, join, resolve } from 'node:path'""")
+patch('P12a', 'scripts/primary-runtime/prepare.ts', [
+  # 上游 rc.1 在 path import 里多了 basename
+  ("""import { dirname, join, resolve } from 'node:path'""",
+   """import { fileURLToPath } from 'node:url'  // loong64-adaption[P12a]
+import { dirname, join, resolve } from 'node:path'"""),
+  ("""import { basename, dirname, join, resolve } from 'node:path'""",
+   """import { fileURLToPath } from 'node:url'  // loong64-adaption[P12a]
+import { basename, dirname, join, resolve } from 'node:path'"""),
+])
 
 patch('P12b', 'scripts/primary-runtime/prepare.ts',
 """    cached = false
@@ -561,11 +625,17 @@ patch('P23b', 'packages/credentials/deepseek-account/src/index.ts',
 """export function platformClientHeaders(platform: 'darwin' | 'win32' | 'linux' | null, client: AccountClientMetadata): Record<string, string> {  // loong64-adaption[P23]""")
 
 print("P24 runtime-patch-policy.ts: 登记 builder-util 补丁 (构建主机专用, 不进 runtime)")
-patch('P24', 'apps/desktop/scripts/runtime-patch-policy.ts',
-"""  '@earendil-works/pi-ai@1.1.0': { scope: 'shared', reason: 'Runtime providers need the streamed argument parsing fix.' },""",
-"""  // loong64-adaption[P24]: electron-builder 的 Arch 枚举补丁只在构建主机生效, 不进入 runtime
-  'builder-util@26.16.0': { scope: 'workspace-only', reason: 'LoongArch64 architecture resolution executes on the build host.' },
-  '@earendil-works/pi-ai@1.1.0': { scope: 'shared', reason: 'Runtime providers need the streamed argument parsing fix.' },""")
+# 上游把 pi-ai 从 1.1.0 升到 1.3.0; 再加一个表头兜底, 以后版本再变也能插入
+_P24_ENTRY = """  // loong64-adaption[P24]: electron-builder 的 Arch 枚举补丁只在构建主机生效, 不进入 runtime
+  'builder-util@26.16.0': { scope: 'workspace-only', reason: 'LoongArch64 architecture resolution executes on the build host.' },"""
+_PI_AI = """  '@earendil-works/pi-ai@{ver}': {{ scope: 'shared', reason: 'Runtime providers need the streamed argument parsing fix.' }},"""
+_P24_HEADER = "export const DESKTOP_RUNTIME_PATCHES: Readonly<Record<string, DesktopRuntimePatch>> = {"
+_P24_VARIANTS = []
+for _ver in ('1.1.0', '1.3.0'):
+    _line = _PI_AI.format(ver=_ver)
+    _P24_VARIANTS.append((_line, _P24_ENTRY + "\n" + _line))
+_P24_VARIANTS.append((_P24_HEADER, _P24_HEADER + "\n" + _P24_ENTRY))
+patch('P24', 'apps/desktop/scripts/runtime-patch-policy.ts', _P24_VARIANTS)
 
 print("P25 runtime-payload-smoke: loong64 跳过 node-addon-require-builtin 断言")
 patch('P25', 'apps/desktop/tests/fixtures/runtime-payload-smoke.mjs',
@@ -713,9 +783,21 @@ patch('P32b', 'pnpm-workspace.yaml',
 """  exceljs@4.4.0: patches/exceljs@4.4.0.patch
   node-addon-native-custom-loader@0.1.9: patches/node-addon-native-custom-loader@0.1.9.patch  # loong64-adaption[P32b]""")
 
-print()
-print("==> 源码补丁全部应用完成")
+if CHECK_ONLY:
+    print()
+    if _failures:
+        print(f"==> 预检失败: {len(_failures)} 个补丁与当前上游不兼容 (未写入任何文件)")
+        for pid, p, _msg in _failures:
+            print(f"    - {pid:20s} {p}")
+        sys.exit(10)
+    print("==> 预检通过: 全部补丁锚点可命中 (未写入任何文件)")
+else:
+    print()
+    print("==> 源码补丁全部应用完成")
 PYEOF
+
+# --check 到此为止: 不创建 shim, 不回填 patch 文件
+if [[ "$CHECK_ONLY" == 1 ]]; then exit 0; fi
 
 # ---------------------------------------------------------------------------
 # 创建 ripgrep loong64 shim 包 (P7 运行时依赖)

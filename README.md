@@ -112,7 +112,8 @@ cd dsh_desktop-loong64
 
 ```bash
 cd dsh_desktop-loong64
-./apply-adaption.sh            # 打 loong64 适配补丁 (幂等)
+./apply-adaption.sh --check     # 先只读预检补丁锚点 (不写文件, 失配退出 10)
+./apply-adaption.sh             # 打 loong64 适配补丁 (幂等)
 ./build-node-addon.sh          # 构建 @deepseek-ai/node-addon-system-linux-loong64 + 静态 landlock
 ./update-runtime-lock.sh       # 写入 linux-loong64 运行时下载源与锁
 
@@ -194,10 +195,20 @@ if ./check-upstream.sh --quiet; then echo "无更新"; else echo "有更新，�
 ```
 
 ```bash
-./sync-upstream.sh --apply --yes --with-tarball   # fetch → checkout → 打补丁 → 构建 → 打包 → 回写
-./sync-upstream.sh --apply --tag dsh-v0.2.2-alpha.3   # 指定目标 tag
+./audit-patches.sh dsh-v0.2.2-rc.1 ../dsh   # 单独预检某个 tag 的补丁兼容性 (只读, 失配退出 1)
+./sync-upstream.sh --apply --yes --with-tarball   # fetch → 预检 → checkout → 打补丁 → 构建 → 打包 → 回写
+./sync-upstream.sh --apply --tag dsh-v0.2.2-rc.1 # 指定目标 tag
+DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不碰工作树/不构建
 ```
 
+> **上游升级必读**：`sync-upstream.sh` 在 `git fetch` 之后、`checkout`/`stash` 之前，
+> 会把目标 tag 用 `git archive` 导出到临时目录并跑 `apply-adaption.sh --check`。
+> 一旦上游重构了被打补丁的代码块（例如 rc.1 把 `desktopTargetPlatform` 改成查表、
+> 把 `execute()` 改名为 `executePreparation()`），同步会**在动工作树之前**带着完整失配清单中止。
+> 按清单给 `apply-adaption.sh` 对应补丁补一个候选锚点即可；`patch()` 支持
+> `[(old, new), ...]`，同一补丁可同时兼容多个 tag。
+> 手动验证：`./apply-adaption.sh --check <某个 tag 导出的源码目录>`（只读，退出码 10 表示失配）。
+>
 > `sync-upstream.sh` 改动的是上游源码工作树与构建产物，**不会删除 `dist/` 下的历史包**。
 
 ---
