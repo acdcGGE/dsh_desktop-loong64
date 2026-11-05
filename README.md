@@ -23,12 +23,16 @@
 
 ```bash
 # Debian / Deepin / UOS
-sudo apt install ./deepseek-harness_0.2.2.rc.1-1_loong64.deb
+sudo apt install ./deepseek-harness_0.2.2.rc.1-2_loong64.deb
 # Arch Linux
-sudo pacman -U deepseek-harness-0.2.2_rc.1-1-loongarch64.pkg.tar.zst
+sudo pacman -U deepseek-harness-0.2.2_rc.1-2-loongarch64.pkg.tar.zst
 ```
 
-> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.2.rc.1-1`，与 `SHA256SUMS` 中的 `0.2.2~rc.1-1` 仅差这一个字符；包内容与版本号不受影响。
+> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.2.rc.1-2`，与 `SHA256SUMS` 中的 `0.2.2~rc.1-2` 仅差这一个字符；包内容与版本号不受影响。
+
+> **从旧版升级**：`-1`（及更早）的 deb 存在「升级后打不开、必须先卸载再安装」的缺陷，
+> 根因是 `postrm` 在升级时误删安装目录。`-2` 已修复，且新增 `preinst` 会自动中和已安装的
+> 旧脚本，**直接 `apt install` 新版即可，不要先卸载**。详见 `BUILD-RECORD.md`。
 
 ---
 

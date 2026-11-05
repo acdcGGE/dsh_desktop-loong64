@@ -266,3 +266,8 @@ sudo apt install ./deepseek-harness_0.2.2~rc.1-2_loong64.deb
 
 `preinst` 会自动中和旧的破坏性 `postrm`；**不要再先 `apt remove`**。
 升级后可检查 `/opt/deepseek-harness/deepseek-harness.bin` 是否存在且可执行。
+
+发布状态：`v0.2.2-rc.1` Release 的资产已由 `-1` **替换为 `-2`**（删除旧 deb/pkg，
+覆盖同名 tar.gz 与 `SHA256SUMS`，并改写 Release 说明）；tag 与下载链接不变。
+Release 附带的 `SHA256SUMS` 只列 `-2` 的 5 个资产，与本地 `dist/SHA256SUMS`（含历史版本）
+不同。
