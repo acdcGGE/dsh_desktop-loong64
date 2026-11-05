@@ -137,3 +137,51 @@ DSH_SRC_TREE=../dsh DSH_DESKTOP_ELECTRON_DIST=../electron-loong64/electron-43.7.
   ./build.sh
 sha256sum dist/* > dist/SHA256SUMS
 ```
+
+---
+
+## 2026-11-05：全量重建 `dsh-v0.2.2-rc.1`
+
+上游 tag `dsh-v0.2.2-rc.1`（commit `66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db`，2026-11-04），
+适配补丁已由 `apply-adaption.sh --check` 预检全部命中（P1–P32 全部「已适配」）。
+执行 `./build.sh` 全量构建，最终 `BUILD_EXIT=0`，三种分发包全部产出。
+
+### 产物
+
+| 文件 | 字节 | SHA256 |
+| --- | --- | --- |
+| `deepseek-harness_0.2.2~rc.1-1_loong64.deb` | 334915828 | `a3f017a705fdb979e767628a4a4843027167a16f355d1437d98af3ed51ff1a55` |
+| `deepseek-harness-0.2.2_rc.1-1-loongarch64.pkg.tar.zst` | 297624958 | `f64069e7606c2ee9e503fe637f8b128f1938016ad861a5c927d85777e06aee33` |
+| `deepseek-harness-0.2.2-rc.1-linux-loong64.tar.gz` | 374187683 | `231223e8c82aec0f7888ca670ecda5bed26115def01731614d81400987fbe853` |
+
+`dist/SHA256SUMS` 已由 `make-dist.sh` 重新生成（含 rc.5 与 rc.1 共 7 项），`sha256sum -c` 全部通过。
+
+### 校验结果
+
+- `.deb`：`Version: 0.2.2~rc.1-1`、`Architecture: loong64`、`Installed-Size: 1110124 KB`，
+  **Depends 31 项**（15 Electron + 16 Python 系统库）；`python/lib/` 根部仅
+  `libpython3.12.so*` / `libpython3.so` / `libtcl9*.so`，**无注入的 BLAS/XML 库**；
+  `postinst` 会把 `chrome-sandbox` 设为 `4755`。
+- `.pkg.tar.zst`：`zstd -t` 通过；归档前两个成员为 `.PKGINFO`、`.INSTALL`；
+  **28 个 `depend`**（Arch 包名）；`chrome-sandbox` 为 `4755`；无组/其他可写条目。
+- `.tar.gz`：`gzip -t` 通过，顶层目录 `deepseek-harness-0.2.2-rc.1-linux-loong64/`。
+- 主程序 ELF：`ELF64 / LoongArch / DOUBLE-FLOAT, OBJ-v1`；`version` 文件为 Electron `43.7.7`。
+- 端到端（产物内 Python 3.12.15）：`numpy 2.3.5`（`a@a` 正常，NEEDED 为 `libblas.so.3`）、
+  `pandas 3.0.1`、`pillow 12.3.0`、`lxml 6.1.3` 全部导入并计算通过。
+- rc.1 新增的 `prunePnpmForeignNativePackages` 正常：运行时 pnpm 的
+  `dist/node_modules/@reflink` 只保留 `reflink` + `reflink-linux-loong64-gnu`，外来平台绑定已裁剪。
+- `check-runtime-libs.py`：`✓ 全部系统库依赖已在构建机安装`。
+
+### 本次新增的避坑记录
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `./build.sh` 直接执行报「权限不够」(126) | 仓库中 `build.sh` 文件模式为 100644 | `chmod +x build.sh`（已提交 mode change 100644→100755） |
+| `build:lib` 崩在 `rolldown@1.1.1`：`Cannot find native binding` | `install-loong64-bindings.sh` 用 `TMP/<包名>.tgz` 作下载目标，而 scoped 包名含 `/`（如 `@rolldown/binding-…`），子目录不存在使 `curl -o` 全部失败；只有无 scope 的两个包能装上 | 临时文件名扁平化 `re.sub(r"[^A-Za-z0-9._-]", "_", name)`；元数据 URL 改标准 `%40scope%2fname` 编码 |
+| `prepare:runtime` 抛 `ENOENT: …/@reflink/@reflink/package.json` | 宿主包本身带 scope（`@reflink/reflink`、`@napi-rs/canvas`）时，脚本算出的 `node_modules` 少上提一级，绑定被装成 `@scope/@scope/<binding>` 双层目录；rc.1 新增的 prune 遍历该目录读不到 `package.json` 即抛错 | 当 `basename(parent_nm).startswith("@")` 时再 `dirname` 一级；清理错位目录后重装 |
+
+rc.1 依赖中镜像确实没有的 5 个可选绑定（不影响本次构建与打包）：
+`@trycua/cua-driver-linux-loong64-gnu@0.28.0`、`jscpd-linux-loong64-gnu@5.1.2`、
+`@anthropic-ai/claude-agent-sdk-linux-loong64-gnu@0.3.263`、
+`@oxc-resolver/binding-linux-loong64-gnu@11.20.0`（镜像仅 11.24.2）、
+`@ubjs/node-linux-loong64-gnu@0.31.0-3`。
