@@ -174,21 +174,62 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 && \
 exit 0
 EOF
 
+# dpkg 升级序列 (本机 dpkg 1.22.6 实测):
+#   旧 prerm upgrade -> 新 preinst upgrade -> 解包新文件
+#   -> **旧 postrm upgrade** -> 新 postinst configure
+# 旧版 postrm 无条件 `rm -rf /opt/deepseek-harness`, 会在解包之后把新版本
+# 整个删掉, 表现为「升级后打不开, 必须先卸载再安装」。
+# 因此: ① 所有维护脚本严格按 $1 分派; ② 新包 preinst 中和已安装的坏 postrm,
+# 使存量用户第一次升级就能恢复, 不必先卸载。
+cat > "$STAGE/DEBIAN/preinst" <<'EOF'
+#!/bin/sh
+set -e
+case "$1" in
+  upgrade)
+    OLD=/var/lib/dpkg/info/deepseek-harness.postrm
+    # 只命中"无条件删除"的旧脚本; 已是分派版/已中和过的脚本不再动 (幂等)。
+    # dpkg 在 preinst 之后才把旧控制文件备份为 .dpkg-old, 故此处修补会被
+    # 解包后调用的旧 postrm 使用。
+    if [ -f "$OLD" ] && grep -q 'rm -rf /opt/deepseek-harness' "$OLD" 2>/dev/null \
+       && ! grep -q 'case "$1" in' "$OLD" 2>/dev/null; then
+      cat > "$OLD" <<'SAFE'
+#!/bin/sh
+# Neutralized by dsh_desktop-loong64 preinst: the old postrm deleted the
+# freshly unpacked application directory during upgrade.
+exit 0
+SAFE
+      chmod 0755 "$OLD" 2>/dev/null || true
+    fi
+    ;;
+esac
+exit 0
+EOF
+
 cat > "$STAGE/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -e
-rm -f /usr/bin/deepseek-harness 2>/dev/null || true
+# 仅在真正卸载时移除命令链接; upgrade 时链接会在解包新包后重建,
+# 提前删除只会制造一个命令缺失窗口。
+case "$1" in
+  remove|purge) rm -f /usr/bin/deepseek-harness 2>/dev/null || true ;;
+esac
 exit 0
 EOF
 
 cat > "$STAGE/DEBIAN/postrm" <<'EOF'
 #!/bin/sh
 set -e
-rm -rf /opt/deepseek-harness 2>/dev/null || true
+# 关键: 升级时 dpkg 在解包新文件之后调用的是「旧包」的 postrm upgrade。
+# upgrade / failed-upgrade / abort-* 一律不能删安装目录。
+case "$1" in
+  remove|purge)
+    rm -rf /opt/deepseek-harness 2>/dev/null || true
+    ;;
+esac
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications || true
 exit 0
 EOF
-chmod 0755 "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/prerm" "$STAGE/DEBIAN/postrm"
+chmod 0755 "$STAGE/DEBIAN/preinst" "$STAGE/DEBIAN/postinst" "$STAGE/DEBIAN/prerm" "$STAGE/DEBIAN/postrm"
 
 # ---------------------------------------------------------------- 桌面入口 / 图标 / 命令链接
 mkdir -p "$STAGE/usr/share/applications" "$STAGE/usr/share/icons/hicolor/256x256/apps" "$STAGE/usr/bin"

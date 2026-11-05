@@ -187,3 +187,82 @@ rc.1 依赖中镜像确实没有的 5 个可选绑定（不影响本次构建与
 `@anthropic-ai/claude-agent-sdk-linux-loong64-gnu@0.3.263`、
 `@oxc-resolver/binding-linux-loong64-gnu@11.20.0`（镜像仅 11.24.2）、
 `@ubjs/node-linux-loong64-gnu@0.31.0-3`。
+
+---
+
+## 2026-11-05 修订 `-2`：修复「升级后必须卸载重装才能打开」
+
+### 现象与现场证据
+
+`/var/log/apt/history.log`：
+
+```
+2026-11-05 23:24:35  Upgrade: deepseek-harness:loong64 (0.2.1~rc.5-1, 0.2.2~rc.1-1)   # 升级后打不开
+2026-11-05 23:30:15  Remove: deepseek-harness:loong64 (0.2.2~rc.1-1)
+2026-11-05 23:30:34  Install: deepseek-harness:loong64 (0.2.2~rc.1-1)                # 卸载重装后恢复
+```
+
+### 根因
+
+`-1` 的 `DEBIAN/postrm` 无条件执行 `rm -rf /opt/deepseek-harness`。
+而 dpkg 升级时**在解包新文件之后**调用的是**旧包的 postrm `upgrade`**，
+于是刚解包好的新版本被旧脚本整个删掉，只剩 `/usr/bin` 链接指向空目录。
+
+用隔离 root（`dpkg --root=... --force-not-root --force-script-chrootless`）实测 dpkg 1.22.6 序列：
+
+```
+v1-postinst configure
+v1-prerm   upgrade
+v2-preinst upgrade
+v1-postrm  upgrade      <- 旧包脚本, 在解包之后
+v2-postinst configure
+RESULT: TARGET-LOST     <- 新版文件被删
+```
+
+第二组实验在新 `preinst upgrade` 里就地中和旧 postrm：
+`PATCHED-old-postrm arg=upgrade` / `RESULT: TARGET-SURVIVED`。
+说明**只修新包的 postrm 不够**：存量用户升级时跑的是已落地的坏脚本，
+必须同时由新 `preinst` 在解包前把它中和掉。
+
+### 修复（`make-deb.sh`）
+
+- `postrm` 严格按 `$1` 分派，只有 `remove|purge` 才删 `/opt/deepseek-harness`；
+  `upgrade` / `failed-upgrade` / `abort-*` 一律不动。
+- `prerm` 同样分派，只在 `remove|purge` 时删 `/usr/bin/deepseek-harness`，
+  避免升级窗口期命令链接消失。
+- 新增 `preinst`：在 `upgrade` 时若检测到已安装的 postrm 是
+  「无条件 `rm -rf` 且无 `case "$1" in` 分派」版本，就地替换为安全版（幂等），
+  使已装 `-1` 的用户**直接升级即可恢复，无需先卸载**。
+- 版本号必须递增到 `-2`（Debian revision / Arch pkgrel），否则同版本安装不会
+  替换 `/var/lib/dpkg/info` 里已落地的坏脚本。
+- Arch 包 `.INSTALL` 的 `post_upgrade` 只做权限修复、不删目录，**不受此缺陷影响**；
+  仅为与 deb 修订号对齐也重建为 `-2`。
+
+### 修订版产物
+
+| 文件 | 字节 | SHA256 |
+| --- | --- | --- |
+| `deepseek-harness_0.2.2~rc.1-2_loong64.deb` | 338098398 | `74d8dedfd9a04599ea2e34c69bfe07f137ffea57bed0c6b02ca870436041395d` |
+| `deepseek-harness-0.2.2_rc.1-2-loongarch64.pkg.tar.zst` | 300145490 | `f811a3e9f6f79777028a8ecc4ac6654055fc0dd458b8991ec1c69c80a427534c` |
+| `deepseek-harness-0.2.2-rc.1-linux-loong64.tar.gz` | 378229736 | `97cf6e6874584a221529baa946e0a82f8dcaf32cd846a7dc1b75661427a1eb67` |
+
+### 验证
+
+- deb：`Version 0.2.2~rc.1-2`，Depends 仍 31 项，控制文件含 `preinst/postinst/prerm/postrm`。
+- Arch 包：`zstd -t` 通过，`pkgver 0.2.2_rc.1-2`，28 个 depend。
+- tar.gz：`gzip -t` 通过；`dist/SHA256SUMS` 9 项 `sha256sum -c` 全部通过。
+- 用**真实 deb 内提取的维护脚本**做路径重定向沙箱测试（不改真实 `/opt`）：
+  - 从坏 `-1` 升级 → `SURVIVED`；
+  - 正常卸载 → `CLEANED`；
+  - 装好后再升级（幂等）→ `SURVIVED`。整体 `PASS`。
+- 构建机无免密 sudo，未做本机真实 `dpkg -i` 升级实测；升级序列与修补效果由上述
+  隔离 dpkg 实验 + 真实脚本沙箱测试覆盖。
+
+### 存量用户升级方式
+
+```bash
+sudo apt install ./deepseek-harness_0.2.2~rc.1-2_loong64.deb
+```
+
+`preinst` 会自动中和旧的破坏性 `postrm`；**不要再先 `apt remove`**。
+升级后可检查 `/opt/deepseek-harness/deepseek-harness.bin` 是否存在且可执行。
