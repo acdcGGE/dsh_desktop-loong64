@@ -76,6 +76,13 @@ for root, dirs, files in os.walk(PNPM):
         if loong == key:
             continue
         parent_nm = os.path.dirname(os.path.dirname(pj))  # .../<pkg>@<ver>/node_modules
+        # 宿主包本身带 scope 时 (如 @reflink/reflink、@napi-rs/canvas), 上式得到的
+        # 是 .../node_modules/@scope, 需要再上提一级才是真正的 node_modules。
+        # 否则会装成 @scope/@scope/<binding> 这种双层目录: 运行时 require 找不到,
+        # 且 pnpm 的 prunePnpmForeignNativePackages 遍历到该目录时读不到
+        # package.json 会直接抛 ENOENT, 导致 prepare:runtime 失败。
+        if os.path.basename(parent_nm).startswith("@"):
+            parent_nm = os.path.dirname(parent_nm)
         target = os.path.join(parent_nm, loong)
         if os.path.exists(target):
             skipped += 1
@@ -97,27 +104,35 @@ for loong, ver, pnm in uniq:
     print(f"  - {loong}@{ver}  ->  {pnm}")
 
 for loong, ver, pnm in uniq:
-    enc = loong.replace("@", "%40")
+    # npm registry 的标准 scope 编码: @scope/name -> %40scope%2fname
+    # 只把 @ 换成 %40 而留下 '/' 时, 部分镜像会 404。
+    enc = loong.replace("@", "%40").replace("/", "%2f")
     try:
-        meta = subprocess.run(["curl", "-fsSL", "--max-time", "25",
+        meta = subprocess.run(["curl", "-fsSL", "--retry", "2", "--retry-delay", "1",
+                               "--retry-all-errors", "--max-time", "40",
                                f"{REGISTRY}/{enc}/"], capture_output=True, text=True)
         if meta.returncode != 0:
-            print(f"跳过 {loong}@{ver}: loongnix 不可达"); missing.append((loong,ver)); continue
+            print(f"跳过 {loong}@{ver}: 镜像无该包或不可达 (HTTP/网络错误)"); missing.append((loong,ver)); continue
         d = json.loads(meta.stdout)
         v = d.get("versions", {}).get(ver)
         if not v:
-            print(f"跳过 {loong}@{ver}: loongnix 无该版本"); missing.append((loong,ver)); continue
+            have = list(d.get("versions", {}).keys())
+            print(f"跳过 {loong}@{ver}: 镜像无该版本 (可用 {len(have)} 个, 末尾: {have[-3:] if have else []})")
+            missing.append((loong,ver)); continue
         tarball = v["dist"]["tarball"]
         shasum = v["dist"].get("shasum", "")
     except Exception as e:
         print(f"跳过 {loong}@{ver}: 元数据错误 {e}"); missing.append((loong,ver)); continue
-    tgz = os.path.join(TMP, loong + ".tgz")
+    # 包名含 '@scope/name', 直接拼进路径会引入不存在的子目录,
+    # 导致 curl -o 对所有 scoped 包都失败。文件名必须扁平化。
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", loong)
+    tgz = os.path.join(TMP, safe + ".tgz")
     try:
         dl = subprocess.run(["curl", "-fsSL", "--retry", "4", "--retry-delay", "2",
                                "--retry-all-errors", "--max-time", "180", tarball, "-o", tgz],
-                            capture_output=True)
+                            capture_output=True, text=True)
         if dl.returncode != 0:
-            print(f"跳过 {loong}@{ver}: 下载失败"); missing.append((loong,ver)); continue
+            print(f"跳过 {loong}@{ver}: 下载失败 {dl.stderr.strip()[:160]}"); missing.append((loong,ver)); continue
         if shasum:
             out = subprocess.run(["sha1sum", tgz], capture_output=True, text=True).stdout.split()[0]
             if out != shasum:
