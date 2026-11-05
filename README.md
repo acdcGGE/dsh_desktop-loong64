@@ -19,16 +19,16 @@
 
 构建产物（`.deb` / `.pkg.tar.zst` / `.tar.gz`）应作为 **GitHub Release 资产** 发布，**不要**提交进 git（已被 `.gitignore` 排除）。
 
-**下载最新构建**：[Releases · v0.2.1-rc.5](https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.1-rc.5)
+**下载最新构建**：[Releases · v0.2.2-rc.1](https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.2-rc.1)
 
 ```bash
 # Debian / Deepin / UOS
-sudo apt install ./deepseek-harness_0.2.1.rc.5-1_loong64.deb
+sudo apt install ./deepseek-harness_0.2.2.rc.1-1_loong64.deb
 # Arch Linux
-sudo pacman -U deepseek-harness-0.2.1_rc.5-1-loongarch64.pkg.tar.zst
+sudo pacman -U deepseek-harness-0.2.2_rc.1-1-loongarch64.pkg.tar.zst
 ```
 
-> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.1.rc.5-1`，与 `SHA256SUMS` 中的 `0.2.1~rc.5-1` 仅差这一个字符；包内容与版本号不受影响。
+> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.2.rc.1-1`，与 `SHA256SUMS` 中的 `0.2.2~rc.1-1` 仅差这一个字符；包内容与版本号不受影响。
 
 ---
 
@@ -88,9 +88,9 @@ mkdir -p "$BUILD" && cd "$BUILD"
 # 1) 取本仓库
 git clone <本仓库地址> dsh_desktop-loong64
 
-# 2) 准备上游源码 (取目标 tag, 例: dsh-v0.2.1-rc.5)
+# 2) 准备上游源码 (取目标 tag, 例: dsh-v0.2.2-rc.1)
 git clone https://github.com/deepseek-ai/deepseek-harness.git dsh
-cd dsh && git checkout dsh-v0.2.1-rc.5 && cd ..
+cd dsh && git checkout dsh-v0.2.2-rc.1 && cd ..
 
 # 3) 准备 loong64 Node 工具链 -> toolchain/node
 #    (从 https://unofficial-builds.nodejs.org 取 loong64 构建, 解压到 toolchain/node)
@@ -103,10 +103,10 @@ cd dsh && git checkout dsh-v0.2.1-rc.5 && cd ..
 
 ```bash
 cd dsh_desktop-loong64
-./build.sh            # 默认构建 dsh-v0.2.1-rc.5 对应的源码状态
+./build.sh            # 构建当前 ../dsh 工作树 (本次验证: dsh-v0.2.2-rc.1)
 ```
 
-`build.sh` 会自动依次执行：应用适配补丁 → 构建原生系统包 → 更新运行时锁 → `pnpm install` → **补齐 loong64 原生绑定**（必须在 install 之后）→ `build:lib` → `build:desktop` → `package-desktop.sh` → `make-deb.sh` + `make-dist.sh`。
+`build.sh` 会自动依次执行：应用适配补丁 → 构建原生系统包 → 更新运行时锁 → `pnpm install` → **补齐 loong64 原生绑定**（必须在 install 之后）→ `build:lib` → `build:desktop` → `check-runtime-libs.py` → `package-desktop.sh` → `make-deb.sh` + `make-pkg.sh` + `make-dist.sh`。
 
 ### 5.3 分步构建（便于排错）
 
@@ -141,7 +141,7 @@ cd ../dsh_desktop-loong64
 | 文件 | 说明 |
 | --- | --- |
 | `deepseek-harness_<ver>-1_loong64.deb` | Debian/Ubuntu/统信/麒麟 安装包（`dpkg -i`） |
-| `deepseek-harness-<pkgver>-<pkgrel>-<carch>.pkg.tar.zst` | Arch 系安装包（`pacman -U`）。`pkgver` 中的 `-` 会转 `_`（如 `0.2.1_rc.5-1`）；`carch` 取自宿主的 `makepkg.conf` 或 `uname -m`，可用 `CARCH=... ./make-pkg.sh` 覆盖 |
+| `deepseek-harness-<pkgver>-<pkgrel>-<carch>.pkg.tar.zst` | Arch 系安装包（`pacman -U`）。`pkgver` 中的 `-` 会转 `_`（如 `0.2.2_rc.1-1`）；`carch` 取自宿主的 `makepkg.conf` 或 `uname -m`，可用 `CARCH=... ./make-pkg.sh` 覆盖 |
 | `deepseek-harness-<ver>-linux-loong64.tar.gz` | 通用分发包，含 `install.sh` / `.desktop` / `SHA256SUMS` |
 
 包内容（三者同源，来自同一个 `linux-loong64-unpacked`）：
@@ -229,12 +229,12 @@ DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不�
 
 | 项 | 值 |
 | --- | --- |
-| 上游版本 | `dsh-v0.2.1-rc.5`（commit `b830ec9`） |
+| 上游版本 | `dsh-v0.2.2-rc.1`（commit `66491b0`） |
 | Electron dist | `darkyzhou/electron-loong64` **v43.7.7**（进程内 `process.versions.electron = 43.7.7`） |
 | npm `electron` | 锁文件 `44.7.0`（仅用于版本推断；实际二进制为 43.7.7） |
 | Node 工具链 | loong64 Node 24 + pnpm 11 |
 | 宿主机 | LoongArch64，glibc 2.38 |
-| 补齐的 loong64 绑定 | `rolldown@1.1.1`、`rolldown@1.2.7`、`lightningcss@1.33.0`（源自 loongnix 镜像） |
-| 验证 | `build:lib` ✅、`build:desktop` ✅；原生包经 `verify-launcher-binary.mjs` 校验为合法 EM_LOONGARCH ELF |
+| 补齐的 loong64 绑定 | `rolldown@1.1.1`、`rolldown@1.2.7`、`lightningcss@1.33.0`、`oxlint@1.81.0`、`reflink@0.1.19`、`canvas@1.0.8` 等（源自 loongnix 镜像） |
+| 验证 | `build:lib` ✅、`build:desktop` ✅、三种分发包 ✅；产物内 Python 导入 numpy/pandas/Pillow/lxml ✅；主程序为合法 LoongArch ELF |
 
 > 详见随仓库的 `BUILD-RECORD.md`（构建时间、环境、产物 SHA256 等）。

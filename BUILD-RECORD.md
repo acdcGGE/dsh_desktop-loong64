@@ -155,6 +155,8 @@ sha256sum dist/* > dist/SHA256SUMS
 | `deepseek-harness-0.2.2-rc.1-linux-loong64.tar.gz` | 374187683 | `231223e8c82aec0f7888ca670ecda5bed26115def01731614d81400987fbe853` |
 
 `dist/SHA256SUMS` 已由 `make-dist.sh` 重新生成（含 rc.5 与 rc.1 共 7 项），`sha256sum -c` 全部通过。
+本次发布地址：<https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.2-rc.1>
+（Release 附带的 `SHA256SUMS` 只列本次上传的 6 个资产，与本地含历史版本的清单不同）。
 
 ### 校验结果
 
