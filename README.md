@@ -202,27 +202,7 @@ if ./check-upstream.sh --quiet; then echo "无更新"; else echo "有更新，�
 
 ---
 
-## 9. 发布到 GitHub（本仓库）
 
-本仓库已配置 `.gitignore`，排除一切重产物：`dist/`、`artifacts/`、上游 `dsh/`、`toolchain/`、`electron-loong64/`、会话级临时脚本。因此仓库本身很轻，仅含构建"配方"。
-
-```bash
-# 在 dsh_desktop-loong64/ 内
-git init
-git add -A
-git commit -m "feat: dsh desktop loong64 build kit (rc.5, electron 43.7.7)"
-
-git remote add origin git@github.com:<你>/dsh_desktop-loong64.git
-git push -u origin main
-```
-
-构建产物（`.deb` / `.pkg.tar.zst` / `.tar.gz`）请作为 **Release 资产** 上传，不要提交进 git：
-
-```bash
-gh release create v0.2.1-rc.5-loong64 --title "dsh 0.2.1-rc.5 (loong64)" dist/*
-```
-
----
 
 ## 10. 参考
 
