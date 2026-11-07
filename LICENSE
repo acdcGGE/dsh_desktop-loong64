@@ -1,20 +1,6 @@
-# 许可说明（License Notice）
-
-本仓库 **dsh_desktop-loong64** 仅包含把 DeepSeek Harness 桌面端（dsh）适配到
-龙芯 LoongArch64（loong64）平台所需的**构建脚本、补丁与文档**，**不包含**
-`deepseek-ai/deepseek-harness` 的应用源码本身。
-
-- 应用源码来自上游 <https://github.com/deepseek-ai/deepseek-harness>，
-  其许可证以**上游仓库为准**（上游 `native/system` 等包的 `package.json` 声明为
-  `BSD-3-Clause`）。请从上游仓库获取并遵守其许可条款。
-- 本仓库中的**构建/适配脚本、补丁与说明文档**以 **MIT 许可证** 发布，
-  详见下文。
-
----
-
 MIT License
 
-Copyright (c) 2026 dsh-loong64 适配贡献者
+Copyright (c) 2026 acdcGGE
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
