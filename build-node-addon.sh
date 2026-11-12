@@ -105,7 +105,11 @@ EOF
 
 echo "==> 重新链接 workspace (识别新平台包)"
 cd "$DSH"
-export PATH="$(cd "$HERE/../toolchain/node/bin" && pwd):$PATH"
+if [[ -d "$HERE/../toolchain/node/bin" ]]; then
+  export PATH="$(cd "$HERE/../toolchain/node/bin" && pwd):$PATH"
+else
+  echo "    (未找到 $HERE/../toolchain/node/bin, 沿用当前 PATH 中的 node/pnpm)"
+fi
 pnpm install --no-frozen-lockfile 2>&1 | tail -3
 
 echo "==> 编译原生二进制 (landlock-run + flock)"

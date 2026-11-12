@@ -3,7 +3,9 @@
 # update-runtime-lock.sh —— 把 linux-loong64 目标写入 primary-runtime 锁
 #
 # 1. scripts/primary-runtime/lock.json  targets 增加 linux-loong64:
-#      node:     unofficial-builds.nodejs.org 的 v24.21.0 linux-loong64 (.tar.xz)
+#      node:     unofficial-builds.nodejs.org 的 v24.21.0 linux-loong64 (.tar.xz);
+#                若 artifacts/node-loong64.tar.xz 存在则改用本地归档 (上游该站带宽
+#                在本机实测约 10 KB/s, 会导致 prepare:runtime 300s 超时)
 #      python:   loong64 分叉的 python-build-standalone 3.12.15+20261021
 #      wheels:   本机构建的 4 个原生轮子 (file:// 直读, 见 prepare.ts P12b)
 # 2. python/sdk-runtime/platforms.json 增加 linux-loong64 (与锁目标集合保持一致)
@@ -30,6 +32,16 @@ PY_TARBALL="$HERE/artifacts/cpython-loong64.tar.gz"
 NODE_VERSION="24.21.0"
 NODE_ARCHIVE="linux-loong64.tar.xz"
 NODE_SHA256="84b10844119d8734b5edbd42c01bd2d83fda50212361a63e91c1371a8bfc91ff"
+NODE_TARBALL="$HERE/artifacts/node-loong64.tar.xz"
+# 本机归档优先: 上游 unofficial-builds 在本机实测约 10 KB/s, 会让 prepare:runtime 300s 超时。
+# nodeVersion 必须从归档内顶层目录反推, 否则 prepare.ts 解压后找不到 source,
+# 且 smoke 检查会把 manifest.node 与 runtime 实际 Node 版本逐一比对。
+if [[ -f "$NODE_TARBALL" ]]; then
+  NODE_SHA256="$(sha256sum "$NODE_TARBALL" | cut -d' ' -f1)"
+  # 用 sed -n '1p' 而非 head: 后者提前关管道会让 tar 收到 SIGPIPE, pipefail 下脚本直接退出。
+  NODE_VERSION="$(tar -tJf "$NODE_TARBALL" | sed -n '1p' | cut -d/ -f1 | sed -E 's/^node-v//; s/-linux-loong64$//')"
+  echo "==> node tarball: v$NODE_VERSION sha256=$NODE_SHA256 (本地)"
+fi
 
 echo "==> 校验本机构建轮子"
 for pat in "numpy-2.3.5-cp312-cp312-linux_loongarch64.whl" \
@@ -91,6 +103,9 @@ target = {
 with open(lock_path, encoding='utf-8') as f:
     lock = json.load(f)
 lock['targets']['linux-loong64'] = target
+# prepare.ts 用顶层 nodeVersion 拼解压后的目录名, smoke 也用它校验 runtime 内 Node 版本;
+# 本地归档版本与上游锁不同步时, 必须同步顶层值, 否则两处都会失败。
+lock['nodeVersion'] = node_version
 with open(lock_path, 'w', encoding='utf-8') as f:
     f.write(json.dumps(lock, indent=2) + '\n')
 print(f"    lock targets: {', '.join(lock['targets'])}")

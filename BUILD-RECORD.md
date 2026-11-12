@@ -271,3 +271,60 @@ sudo apt install ./deepseek-harness_0.2.2~rc.1-2_loong64.deb
 覆盖同名 tar.gz 与 `SHA256SUMS`，并改写 Release 说明）；tag 与下载链接不变。
 Release 附带的 `SHA256SUMS` 只列 `-2` 的 5 个资产，与本地 `dist/SHA256SUMS`（含历史版本）
 不同。
+
+---
+
+## 2026-11-12：全量重建 `dsh-v0.2.2-rc.2`
+
+上游 tag `dsh-v0.2.2-rc.2`（commit `ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c`，发布
+2026-11-11），本地源码工作树重建于 `/home/yuri/文档/dsh`（浅克隆该 tag 后 `fetch --tags`）。
+`sync-upstream.sh --apply --yes` 最终成功；deb/pkg 均产出，未产 tar.gz（默认包格式）。
+
+### 本次配方修正（均已回写脚本）
+
+| 脚本 | 改动 | 证据 |
+| --- | --- | --- |
+| `apply-adaption.sh` | P23 目标改为 `client-metadata.ts`（rc.2 把两个函数从 `index.ts` 拆出，函数体不变）；P29 在 rc.2 上游已删除独立 CLI 检查时跳过；新增 **P33** 把 `desktop-publish-targets.ts` 的 `targetSchema` 扩到 `linux-loong64` | rc.1/rc.2 干净 tarball 的 `--check` 均退出 0；P33 修复 `retain-desktop-ci.ts(39,40) TS2345` |
+| `sync-upstream.sh` | `pnpm install` 后补 `install-loong64-bindings.sh`；`SHA256SUMS` 的 deb glob 由 `deepseek-harness-*.deb` 改为 `deepseek-harness_*.deb` | 首次生成的 `SHA256SUMS` 只有 pkg，漏掉 deb |
+| `build-node-addon.sh` | `toolchain/node/bin` 不存在时不再让 `cd` 报错，沿用当前 PATH | 日志出现 `cd: .../toolchain/node/bin: 没有那个文件或目录` |
+| `package-desktop.sh` | Node 路径支持 `DSH_NODE_BIN` 或回退到 `command -v node` | 原硬编码路径在本机不存在，步骤 9 直接失败 |
+| `update-runtime-lock.sh` | 非空 `artifacts/node-loong64.tar.xz` 时以归档内顶层目录反推 `nodeVersion` 并计算 sha；同步写回锁顶层 `nodeVersion` | unofficial-builds 实测 300 s 仅收 3.2/30.7 MB；版本不同步导致 prepare 解压路径与 smoke 双重失败 |
+| `make-pkg.sh` | `CARCH`/`PKG_ARCH` 为 `loongarch64` 时归一为 `loong64`，包名与 `.PKGINFO` 的 `arch` 同步修正 | 龙芯 `uname -m` 是 `loongarch64`，Arch loong64 端口用 `loong64`，旧包名 pacman 不识别 |
+
+### 构建环境与运行时偏差
+
+- 构建工具链：Node **24.14.0** loong64（复用本机已有二进制）+ pnpm **11.28.5**（npm 镜像
+  `registry.loongnix.cn:5873`）；Electron `darkyzhou/electron-loong64` **v43.7.7**（其内嵌 Node 24.21.0）。
+- primary-runtime 的 Node 归档改用本机 `node-v24.14.0-linux-loong64.tar.xz`，因此运行时
+  `manifest.node = 24.14.0`（上游锁为 24.21.0，但该源在本机带宽不可用）。归档内容目录名与锁版本
+  已对齐，smoke 检查通过。Python 仍为本机分叉 `3.12.15+20261021`，4 个 wheel 复用 pip 缓存，
+  sha256 与上次记录一致。
+- `check-runtime-libs.py` 未单独重跑（沿用上次已装齐的 31 个包）；打包阶段的
+  `prepare:runtime` 完整 smoke 通过：Node/pnpm/Office 转换/插件安装/pty 全部 OK。
+
+### 产物（`dist/SHA256SUMS` 2 项，`sha256sum -c` 全部通过）
+
+| 文件 | 大小 | SHA256 |
+| --- | --- | --- |
+| `deepseek-harness_0.2.2~rc.2-1_loong64.deb` | 365 MiB | `46f42fbe529a49dd9463a8fdfa8e53a4640d22333a2fdbf8dab767ddfddb7afd` |
+| `deepseek-harness-0.2.2_rc.2-1-loong64.pkg.tar.zst` | 324 MiB | `b7766bcfbd05708ffef854953ead17a51d78ca8f5c995748170c4948c8c565ec` |
+
+校验：deb `Version: 0.2.2~rc.2-1`、`Architecture: loong64`、`Installed-Size: 1460096 KB`、
+`Depends` 31 项，控制脚本含 `preinst/postinst/prerm/postrm`（升级修复版）；
+pkg `zstd -t` 通过、`.PKGINFO` 28 个 `depend`、`arch = loong64`，归档首两项为
+`.PKGINFO`/`.INSTALL`；unpacked 主程序为 LoongArch ELF。
+本机免密 sudo 不可用，未做真实 `dpkg -i` 升级实测。
+
+### 复现命令
+
+```bash
+export PATH=/path/to/node-v24.14.0-linux-loong64/bin:/path/to/pnpm/bin:$PATH
+export DSH_DESKTOP_ELECTRON_DIST=/path/to/electron-43.7.7
+export NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
+export npm_config_registry=https://registry.loongnix.cn:5873
+cd dsh_desktop-loong64-main
+./sync-upstream.sh --apply --tag dsh-v0.2.2-rc.2 --yes
+```
+
+> 若 upstream Node 归档仍不可达，先备好 `artifacts/node-loong64.tar.xz`（顶层目录须为
+> `node-v<version>-linux-loong64`），`update-runtime-lock.sh` 会自动按归档内容写锁。

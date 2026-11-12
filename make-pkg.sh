@@ -8,6 +8,7 @@
 # 用法:
 #   ./make-pkg.sh [unpacked目录]      省略则自动探测
 #   PKG_REL=2 ./make-pkg.sh           自定义 pkgrel (默认 1)
+#   PKG_ARCH=loong64 ./make-pkg.sh    自定义架构名 (默认 loong64; loongarch64 自动归一)
 #   PKG_STRIP=0 ./make-pkg.sh         不做精简(保留全部 locale)
 #   PKG_STRIP=aggressive ./make-pkg.sh  再删 SwiftShader 软渲染库
 #   ZSTD_LEVEL=3 ./make-pkg.sh        压缩级别 (默认 10; 越大越慢越小)
@@ -45,6 +46,12 @@ SRC_TREE="$(detect_src_tree)"
 # 而 set -o pipefail 会让 grep 的退出码 1 直接终止脚本。
 CARCH="${CARCH:-$( { grep -m1 '^CARCH=' /etc/makepkg.conf 2>/dev/null || true; } | cut -d'"' -f2)}"
 CARCH="${CARCH:-$(uname -m)}"
+# Arch Linux loong64 的架构名是 loong64; uname -m 在龙芯上报告 loongarch64,
+# 直接拿来当 CARCH 会产出 -loongarch64 包, pacman 识别不到。统一归一为 loong64。
+PKG_ARCH="${PKG_ARCH:-$CARCH}"
+if [[ "$PKG_ARCH" == "loongarch64" ]]; then
+  PKG_ARCH="loong64"
+fi
 OUT="$HERE/dist"
 TARGETS="$SRC_TREE/apps/desktop/.desktop-build/targets/linux-loong64"
 DSH="${1:-}"
@@ -69,12 +76,12 @@ VERSION="$(python3 -c "import json;print(json.load(open('$SRC_TREE/apps/desktop/
 PKGVER="${VERSION//-/_}"
 ICON_SRC="$SRC_TREE/apps/desktop/resources/icon.png"
 LAUNCHER="$HERE/deepseek-harness-launcher.sh"
-PKG="deepseek-harness-${PKGVER}-${PKG_REL}-${CARCH}.pkg.tar.zst"
+PKG="deepseek-harness-${PKGVER}-${PKG_REL}-${PKG_ARCH}.pkg.tar.zst"
 
 echo "==> 产物目录: $DSH"
 echo "==> 源码树:   $SRC_TREE"
 echo "==> 上游版本: $VERSION"
-echo "==> 包版本:   ${PKGVER}-${PKG_REL} (arch=$CARCH)"
+echo "==> 包版本:   ${PKGVER}-${PKG_REL} (arch=$PKG_ARCH)"
 
 # ---------------------------------------------------------------- 依赖声明
 # 包本身就是给 Arch 系的, 依赖名一律用 Arch (pacman) 包名, 与构建宿主无关。
@@ -168,7 +175,7 @@ SIZE_KB="$(du -sk "$STAGE" | cut -f1)"
   echo "builddate = $(date +%s)"
   echo "packager = dsh_desktop-loong64 <noreply@localhost>"
   echo "size = $((SIZE_KB * 1024))"
-  echo "arch = ${CARCH}"
+  echo "arch = ${PKG_ARCH}"
   echo "license = custom"
   for d in "${DEPENDS[@]}"; do echo "depend = $d"; done
 } > "$STAGE/.PKGINFO"

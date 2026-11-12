@@ -18,6 +18,7 @@
 #   4. update-runtime-lock.sh     (锁里写入 linux-loong64 目标, 决定 TS 类型)
 #   5. build-node-addon.sh        (重建 loong64 原生平台包)
 #   6. pnpm install               (新 tag 的依赖可能变化)
+#   6b. install-loong64-bindings.sh (补齐上游未声明的 loong64 原生绑定; 必须在 install 之后)
 #   7. pnpm run build:lib
 #   8. pnpm run build:desktop
 #   9. 重新运行 package-desktop.sh (打包 electron 目录)
@@ -117,6 +118,7 @@ if [[ "$APPLY" == 0 ]]; then
   4. "$HERE/update-runtime-lock.sh" "$LOCAL_DIR"
   5. "$HERE/build-node-addon.sh" "$LOCAL_DIR"
   6. (cd "$LOCAL_DIR" && pnpm install)
+  6b. python3 "$HERE/install-loong64-bindings.sh"
   7. (cd "$LOCAL_DIR" && pnpm run build:lib)
   8. (cd "$LOCAL_DIR" && pnpm run build:desktop)
   9. "$HERE/package-desktop.sh"
@@ -217,6 +219,11 @@ echo "==> [5/11] build-node-addon.sh"
 echo "==> [6/11] pnpm install"
 ( cd "$LOCAL_DIR" && pnpm install ) || { echo "pnpm install 失败"; exit 1; }
 
+# 上游 optionalDependencies 从不声明 loong64; 不补绑定会在 build:lib 报
+# "Cannot find native binding" (rc.1 构建时的实际故障)。必须与 build.sh 同序。
+echo "==> [6b/11] install-loong64-bindings.sh"
+python3 "$HERE/install-loong64-bindings.sh" || { echo "install-loong64-bindings 失败"; exit 1; }
+
 echo "==> [7/11] pnpm run build:lib"
 ( cd "$LOCAL_DIR" && pnpm run build:lib ) || { echo "build:lib 失败"; exit 1; }
 
@@ -246,8 +253,10 @@ if [[ "$WITH_TARBALL" == 1 ]]; then
   "$HERE/make-dist.sh" "$UNPACKED" || { echo "make-dist 失败"; exit 1; }
 fi
 # 汇总校验值 (覆盖 dist 下所有大件)
-( cd "$HERE/dist" && sha256sum deepseek-harness-*.deb deepseek-harness-*.pkg.tar.zst \
-    deepseek-harness-*-linux-loong64.tar.gz 2>/dev/null | grep -v '^\*$' > SHA256SUMS ) || true
+# deb 文件名以下划线开头 (deepseek-harness_0.2.2~rc.2-1_loong64.deb), 不能用连字符 glob,
+# 否则 SHA256SUMS 只列 pkg, 发布后用户无法校验 deb。
+( cd "$HERE/dist" && sha256sum deepseek-harness_*.deb deepseek-harness-*.pkg.tar.zst \
+    deepseek-harness-*-linux-loong64.tar.gz 2>/dev/null > SHA256SUMS ) || true
 
 echo "==> [11/11] 回写 upstream.conf"
 sed -i "s|^LOCAL_VERSION=.*|LOCAL_VERSION=\"$NEW_VER\"|" "$CONF"

@@ -19,20 +19,20 @@
 
 构建产物（`.deb` / `.pkg.tar.zst` / `.tar.gz`）应作为 **GitHub Release 资产** 发布，**不要**提交进 git（已被 `.gitignore` 排除）。
 
-**下载最新构建**：[Releases · v0.2.2-rc.1](https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.2-rc.1)
+**下载最新构建**：[Releases · v0.2.2-rc.2](https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.2-rc.2)
 
 ```bash
 # Debian / Deepin / UOS
-sudo apt install ./deepseek-harness_0.2.2.rc.1-2_loong64.deb
-# Arch Linux
-sudo pacman -U deepseek-harness-0.2.2_rc.1-2-loongarch64.pkg.tar.zst
+sudo apt install ./deepseek-harness_0.2.2.rc.2-1_loong64.deb
+# Arch Linux（注意架构字段是 loong64，不是 loongarch64）
+sudo pacman -U deepseek-harness-0.2.2_rc.2-1-loong64.pkg.tar.zst
 ```
 
-> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.2.rc.1-2`，与 `SHA256SUMS` 中的 `0.2.2~rc.1-2` 仅差这一个字符；包内容与版本号不受影响。
+> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.2.rc.2-1`，与 `SHA256SUMS` 中的 `0.2.2~rc.2-1` 仅差这一个字符；包内容与版本号不受影响。
 
-> **从旧版升级**：`-1`（及更早）的 deb 存在「升级后打不开、必须先卸载再安装」的缺陷，
-> 根因是 `postrm` 在升级时误删安装目录。`-2` 已修复，且新增 `preinst` 会自动中和已安装的
-> 旧脚本，**直接 `apt install` 新版即可，不要先卸载**。详见 `BUILD-RECORD.md`。
+> **从旧版升级**：rc.1 的 `-1`（及更早）deb 存在「升级后打不开、必须先卸载再安装」的缺陷，
+> 根因是 `postrm` 在升级时误删安装目录。rc.1 `-2` 起已修复，并新增 `preinst` 自动中和已安装的
+> 旧脚本；rc.2 `-1` 继承该修复，**直接 `apt install` 新版即可，不要先卸载**。详见 `BUILD-RECORD.md`。
 
 ---
 
@@ -92,9 +92,9 @@ mkdir -p "$BUILD" && cd "$BUILD"
 # 1) 取本仓库
 git clone <本仓库地址> dsh_desktop-loong64
 
-# 2) 准备上游源码 (取目标 tag, 例: dsh-v0.2.2-rc.1)
+# 2) 准备上游源码 (取目标 tag, 例: dsh-v0.2.2-rc.2)
 git clone https://github.com/deepseek-ai/deepseek-harness.git dsh
-cd dsh && git checkout dsh-v0.2.2-rc.1 && cd ..
+cd dsh && git checkout dsh-v0.2.2-rc.2 && cd ..
 
 # 3) 准备 loong64 Node 工具链 -> toolchain/node
 #    (从 https://unofficial-builds.nodejs.org 取 loong64 构建, 解压到 toolchain/node)
@@ -107,7 +107,7 @@ cd dsh && git checkout dsh-v0.2.2-rc.1 && cd ..
 
 ```bash
 cd dsh_desktop-loong64
-./build.sh            # 构建当前 ../dsh 工作树 (本次验证: dsh-v0.2.2-rc.1)
+./build.sh            # 构建当前 ../dsh 工作树 (本次验证: dsh-v0.2.2-rc.2)
 ```
 
 `build.sh` 会自动依次执行：应用适配补丁 → 构建原生系统包 → 更新运行时锁 → `pnpm install` → **补齐 loong64 原生绑定**（必须在 install 之后）→ `build:lib` → `build:desktop` → `check-runtime-libs.py` → `package-desktop.sh` → `make-deb.sh` + `make-pkg.sh` + `make-dist.sh`。
@@ -145,7 +145,7 @@ cd ../dsh_desktop-loong64
 | 文件 | 说明 |
 | --- | --- |
 | `deepseek-harness_<ver>-1_loong64.deb` | Debian/Ubuntu/统信/麒麟 安装包（`dpkg -i`） |
-| `deepseek-harness-<pkgver>-<pkgrel>-<carch>.pkg.tar.zst` | Arch 系安装包（`pacman -U`）。`pkgver` 中的 `-` 会转 `_`（如 `0.2.2_rc.1-1`）；`carch` 取自宿主的 `makepkg.conf` 或 `uname -m`，可用 `CARCH=... ./make-pkg.sh` 覆盖 |
+| `deepseek-harness-<pkgver>-<pkgrel>-<carch>.pkg.tar.zst` | Arch 系安装包（`pacman -U`）。`pkgver` 中的 `-` 会转 `_`（如 `0.2.2_rc.1-1`）；`carch` 默认取自宿主的 `makepkg.conf` 或 `uname -m`，但 `loongarch64` 会归一为 Arch loong64 端口使用的 **`loong64`**，可用 `PKG_ARCH=... ./make-pkg.sh` 覆盖 |
 | `deepseek-harness-<ver>-linux-loong64.tar.gz` | 通用分发包，含 `install.sh` / `.desktop` / `SHA256SUMS` |
 
 包内容（三者同源，来自同一个 `linux-loong64-unpacked`）：
@@ -190,6 +190,12 @@ cd ../dsh_desktop-loong64
 ./check-upstream.sh --fixtures DIR     # 离线调试: 从 DIR 读 releases.json / tags.json
 ```
 
+> **匿名 API 限流**：GitHub 未认证请求配额仅 60 次/小时，共享出口 IP 很容易被限流
+> （releases/tags 返回 HTTP 403），此时脚本会误报「无法判定」。本机已登录 `gh` 时可用认证
+> API 供离线检查：`gh api 'repos/deepseek-ai/deepseek-harness/releases?per_page=30' > /tmp/fixtures/releases.json`、
+> `gh api '.../tags?per_page=30' > /tmp/fixtures/tags.json`，再跑
+> `./check-upstream.sh --fixtures /tmp/fixtures --no-git`。改进方向是让脚本在匿名限流时自动回落到 `gh api`。
+
 **退出码**：`0` 已是最新 / 无法判定；`10` 上游有更新可用。便于在脚本里分支：
 
 ```bash
@@ -199,9 +205,9 @@ if ./check-upstream.sh --quiet; then echo "无更新"; else echo "有更新，�
 ```
 
 ```bash
-./audit-patches.sh dsh-v0.2.2-rc.1 ../dsh   # 单独预检某个 tag 的补丁兼容性 (只读, 失配退出 1)
+./audit-patches.sh dsh-v0.2.2-rc.2 ../dsh   # 单独预检某个 tag 的补丁兼容性 (只读, 失配退出 1)
 ./sync-upstream.sh --apply --yes --with-tarball   # fetch → 预检 → checkout → 打补丁 → 构建 → 打包 → 回写
-./sync-upstream.sh --apply --tag dsh-v0.2.2-rc.1 # 指定目标 tag
+./sync-upstream.sh --apply --tag dsh-v0.2.2-rc.2 # 指定目标 tag
 DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不碰工作树/不构建
 ```
 
@@ -219,7 +225,7 @@ DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不�
 
 
 
-## 10. 参考
+## 9. 参考
 
 - 上游仓库：<https://github.com/deepseek-ai/deepseek-harness>
 - loong64 Electron 移植：<https://github.com/darkyzhou/electron-loong64>
@@ -229,16 +235,20 @@ DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不�
 
 ---
 
-## 11. 已验证构建记录（provenance）
+## 10. 已验证构建记录（provenance）
 
 | 项 | 值 |
 | --- | --- |
-| 上游版本 | `dsh-v0.2.2-rc.1`（commit `66491b0`） |
+| 上游版本 | `dsh-v0.2.2-rc.2`（commit `ddac9676`） |
 | Electron dist | `darkyzhou/electron-loong64` **v43.7.7**（进程内 `process.versions.electron = 43.7.7`） |
 | npm `electron` | 锁文件 `44.7.0`（仅用于版本推断；实际二进制为 43.7.7） |
-| Node 工具链 | loong64 Node 24 + pnpm 11 |
+| Node 工具链 | loong64 Node 24.14.0（构建）+ pnpm 11.28.5；运行时 Node 亦为 24.14.0（上游锁为 24.21.0，因下载带宽不可用改用本机归档） |
 | 宿主机 | LoongArch64，glibc 2.38 |
 | 补齐的 loong64 绑定 | `rolldown@1.1.1`、`rolldown@1.2.7`、`lightningcss@1.33.0`、`oxlint@1.81.0`、`reflink@0.1.19`、`canvas@1.0.8` 等（源自 loongnix 镜像） |
-| 验证 | `build:lib` ✅、`build:desktop` ✅、三种分发包 ✅；产物内 Python 导入 numpy/pandas/Pillow/lxml ✅；主程序为合法 LoongArch ELF |
+| 验证 | `build:lib` ✅、`build:desktop` ✅、deb/pkg 分发包 ✅（本次未产 tar.gz）；产物内 Python 导入 numpy/pandas/Pillow/lxml ✅；主程序为合法 LoongArch ELF |
 
 > 详见随仓库的 `BUILD-RECORD.md`（构建时间、环境、产物 SHA256 等）。
+>
+> rc.2 相对 rc.1 的适配增量：`apply-adaption.sh` 新增 P33（发布目标 `targetSchema` 纳入
+> `linux-loong64`，修复 TS2345），P23 目标迁移到 `client-metadata.ts`，P29 在上游已移除
+> 独立 CLI 检查时自动跳过。rc.1/rc.2 干净源码预检均通过。

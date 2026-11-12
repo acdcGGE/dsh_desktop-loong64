@@ -23,7 +23,13 @@
 #
 # 上游跨版本兼容: patch() 的 old 允许传 [(old, new), ...] 候选列表。上游重构
 # 代码块时, 把新旧两种写法都列为候选, 按顺序试第一个命中的, 因此同一份配方
-# 可同时适配多个 tag (已验证 dsh-v0.2.1-rc.5 与 dsh-v0.2.2-rc.1)。
+# 可同时适配多个 tag (已验证 dsh-v0.2.1-rc.5 / dsh-v0.2.2-rc.1 / dsh-v0.2.2-rc.2)。
+# rc.2 的两处结构性变化已在脚本内兼容:
+#   P23: desktopClientHeaders/platformClientHeaders 从 deepseek-account/src/index.ts
+#        拆到同目录 client-metadata.ts, 函数体未变; 按文件实际内容选路径。
+#   P29: 上游删除了独立 skill CLI 的冒烟检查, 旧锚点不存在时视为上游已修复并跳过。
+#   P33: rc.2 的 DesktopAutoUpdateTarget 扩到 linux-loong64 后, 发布 runner 的
+#        targetSchema 需同步扩展, 否则 retain-desktop-ci.ts 的 tsc 报 TS2345。
 # 升级上游后先跑: ./apply-adaption.sh --check <目标 tag 导出的源码目录>
 # =============================================================================
 set -euo pipefail
@@ -610,7 +616,14 @@ patch('P22', 'apps/desktop/src/mandatory-update-policy.ts',
   readonly arch: 'x64' | 'arm64' | 'loong64'  // loong64-adaption[P22]""")
 
 print("P23 deepseek-account: 客户端平台头增加 linux / desktop-linux")
-patch('P23a', 'packages/credentials/deepseek-account/src/index.ts',
+# rc.2 把这两个函数从 index.ts 拆到 client-metadata.ts (函数体不变); rc.1 及更早仍在 index.ts。
+# 按实际文件里有函数定义的位置选目标, 保证同一份配方跨 tag 可用。
+_p23_candidates = ('packages/credentials/deepseek-account/src/client-metadata.ts',
+                   'packages/credentials/deepseek-account/src/index.ts')
+_p23_path = next((p for p in _p23_candidates
+                  if os.path.exists(os.path.join(repo, p))
+                  and 'export function desktopClientHeaders' in read(p)), _p23_candidates[-1])
+patch('P23a', _p23_path,
 """export function desktopClientHeaders(platform: 'darwin' | 'win32' | null): Record<string, string> {
   if (platform === null) return {}
   return { 'x-client-platform': platform === 'win32' ? 'desktop-win' : 'desktop-mac' }
@@ -620,7 +633,7 @@ patch('P23a', 'packages/credentials/deepseek-account/src/index.ts',
   // loong64-adaption[P23]: Linux 桌面端上报 desktop-linux
   return { 'x-client-platform': platform === 'win32' ? 'desktop-win' : platform === 'linux' ? 'desktop-linux' : 'desktop-mac' }
 }""")
-patch('P23b', 'packages/credentials/deepseek-account/src/index.ts',
+patch('P23b', _p23_path,
 """export function platformClientHeaders(platform: 'darwin' | 'win32' | null, client: AccountClientMetadata): Record<string, string> {""",
 """export function platformClientHeaders(platform: 'darwin' | 'win32' | 'linux' | null, client: AccountClientMetadata): Record<string, string> {  // loong64-adaption[P23]""")
 
@@ -694,8 +707,13 @@ patch('P28', 'apps/desktop/scripts/runtime-patch-policy.ts',
   'node-addon-native-custom-loader@0.1.9': { scope: 'shared', reason: 'LoongArch64 hosts read Node internals through --expose-internals instead of the native addon.' },""")
 
 print("P29 smoke-runtime.ts: loong64 跳过 LibreOfficeKit 独立 CLI 转换检查")
-patch('P29', 'apps/desktop/scripts/smoke-runtime.ts',
-"""    const cliResponse = await fetch(new URL('/desktop-smoke-office-cli', ready.url), {
+_p29_file = 'apps/desktop/scripts/smoke-runtime.ts'
+if 'desktop-smoke-office-cli' not in read(_p29_file):
+    # rc.2 起上游删除了独立 CLI 子进程检查, 只保留宿主内转换与 operations, 无需再跳过。
+    print(f"  [跳过] {_p29_file} [P29] 上游已移除独立 CLI 检查 (rc.2+)")
+else:
+    patch('P29', _p29_file,
+    """    const cliResponse = await fetch(new URL('/desktop-smoke-office-cli', ready.url), {
       headers: { cookie }, signal: AbortSignal.timeout(120_000),
     })
     if (!cliResponse.ok) throw new Error(`desktop runtime: skill CLI failed: ${await cliResponse.text()}`)
@@ -704,7 +722,7 @@ patch('P29', 'apps/desktop/scripts/smoke-runtime.ts',
       throw new Error('desktop runtime: skill CLI did not return capabilities and a PDF')
     }
     console.log('desktop runtime: DOCX, XLSX, PPTX to PDF and skill CLI discovery passed')""",
-"""    // loong64-adaption[P29]: 龙芯只有 wasm 版 LibreOfficeKit, 宿主内的转换已通过(上面循环),
+    """    // loong64-adaption[P29]: 龙芯只有 wasm 版 LibreOfficeKit, 宿主内的转换已通过(上面循环),
     // 但独立 CLI 子进程在该 wasm 运行时上抛 "unknown C++ exception", 跳过该项检查。
     if (process.arch === 'loong64') {
       console.log('desktop runtime: DOCX, XLSX, PPTX to PDF passed (skill CLI skipped on loong64)')
@@ -782,6 +800,14 @@ patch('P32b', 'pnpm-workspace.yaml',
 """  exceljs@4.4.0: patches/exceljs@4.4.0.patch""",
 """  exceljs@4.4.0: patches/exceljs@4.4.0.patch
   node-addon-native-custom-loader@0.1.9: patches/node-addon-native-custom-loader@0.1.9.patch  # loong64-adaption[P32b]""")
+
+print("P33 desktop-publish-targets.ts: 发布 runner 目标枚举增加 linux-loong64")
+# rc.2 的 P15b 把 resolveDesktopBuildTarget 的返回类型扩到 DesktopAutoUpdateTarget
+# (含 linux-loong64); retain-desktop-ci.ts 里 route.target.includes(target) 仍用这里的
+# z.enum 窄类型, tsc 报 TS2345。扩展枚举同时修正类型与语义 (loong64 产物可登记 runner)。
+patch('P33', 'apps/desktop/scripts/desktop-publish-targets.ts',
+"""const targetSchema = z.enum(['mac-arm64', 'mac-x64', 'win-x64'])""",
+"""const targetSchema = z.enum(['mac-arm64', 'mac-x64', 'win-x64', 'linux-loong64'])  // loong64-adaption[P33]""")
 
 if CHECK_ONLY:
     print()

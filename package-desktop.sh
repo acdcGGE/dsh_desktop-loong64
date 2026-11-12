@@ -15,7 +15,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 用父目录而非按目录名裁剪, 这样工程目录改名也不会失效。
 BUILD="$(cd "$HERE/.." && pwd)"
 DSH="$BUILD/dsh"
-NODE_BIN="$BUILD/toolchain/node/bin"
+# 工具链可放在旧位置 ($BUILD/toolchain/node/bin), 也可直接沿用 PATH 中的 node
+# (例如本机复用其他目录下的 Node 24)。以实际能找到 node 的路径为准。
+NODE_BIN="${DSH_NODE_BIN:-$BUILD/toolchain/node/bin}"
+if [[ ! -x "$NODE_BIN/node" ]]; then
+  NODE_BIN="$(dirname "$(command -v node)")"
+fi
 ELECTRON_DIST="${DSH_DESKTOP_ELECTRON_DIST:-/usr/lib/electron44}"
 
 export PATH="$NODE_BIN:$PATH"
