@@ -19,16 +19,18 @@
 
 构建产物（`.deb` / `.pkg.tar.zst` / `.tar.gz`）应作为 **GitHub Release 资产** 发布，**不要**提交进 git（已被 `.gitignore` 排除）。
 
-**下载最新构建**：[Releases · v0.2.2-rc.2](https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.2-rc.2)
+**下载最新构建**：[Releases · v0.2.2-rc.3](https://github.com/acdcGGE/dsh_desktop-loong64/releases/tag/v0.2.2-rc.3)
 
 ```bash
 # Debian / Deepin / UOS
-sudo apt install ./deepseek-harness_0.2.2.rc.2-1_loong64.deb
+sudo apt install ./deepseek-harness_0.2.2.rc.3-1_loong64.deb
 # Arch Linux（注意架构字段是 loong64，不是 loongarch64）
-sudo pacman -U deepseek-harness-0.2.2_rc.2-1-loong64.pkg.tar.zst
+sudo pacman -U deepseek-harness-0.2.2_rc.3-1-loong64.pkg.tar.zst
 ```
 
-> GitHub 会把资产名中的 `~` 规范成 `.`，故下载到的 deb 名为 `0.2.2.rc.2-1`，与 `SHA256SUMS` 中的 `0.2.2~rc.2-1` 仅差这一个字符；包内容与版本号不受影响。
+> GitHub 会把资产名中的 `~` 规范成 `.`，故 deb 资产名为 `0.2.2.rc.3-1`（本地构建产物里是
+> `0.2.2~rc.3-1`）。本 Release 附带的 `SHA256SUMS` 已按 **GitHub 实际资产名** 生成，下载后可直接
+> `sha256sum -c SHA256SUMS`；包内容与版本号不受影响。
 
 > **从旧版升级**：rc.1 的 `-1`（及更早）deb 存在「升级后打不开、必须先卸载再安装」的缺陷，
 > 根因是 `postrm` 在升级时误删安装目录。rc.1 `-2` 起已修复，并新增 `preinst` 自动中和已安装的
@@ -52,7 +54,8 @@ sudo pacman -U deepseek-harness-0.2.2_rc.2-1-loong64.pkg.tar.zst
 ## 3. 环境要求
 
 - **架构 / 系统**：龙芯 LoongArch64（loong64）机器，Linux（glibc ≥ 2.38，建议 Loongnix / 统信 / 麒麟）。
-- **Node 工具链（loong64）**：Node 24 + pnpm，置于构建根目录的 `toolchain/node/bin`（构建脚本会加入 `PATH`）。可从 <https://unofficial-builds.nodejs.org> 取 loong64 构建。
+- **Node 工具链（loong64）**：Node **24**（dsh `engines` 要求 ≥ 24.9.0）+ **pnpm 11.28.5**，两者必须能从同一个 PATH 前缀找到。先备好 Node 24 loong64 归档（<https://unofficial-builds.nodejs.org> 或本机归档）与 `toolchain/pnpm/`（从龙芯镜像 `npm install --global pnpm@11.28.5 --prefix ...` 安装，命令见 §5.1），再运行 **`./setup-toolchain.sh`** 组装出脚本约定的 `toolchain/node/bin`（符号链接，幂等，不联网）。`build.sh` / `sync-upstream.sh` / `build-node-addon.sh` 会在工具链缺失时自动调用它。
+  > 注意：pnpm 11 内部 `require("node:sqlite")`，Node 20 跑会抛 `ERR_UNKNOWN_BUILTIN_MODULE`；只把 pnpm 加进 PATH 但 node 仍是 20 一样失败。
 - **Electron 二进制**：[`darkyzhou/electron-loong64`](https://github.com/darkyzhou/electron-loong64) 的 **v43.7.7**，解压到 `electron-loong64/electron-43.7.7/`。通过 `DSH_DESKTOP_ELECTRON_DIST` 指定。
 - **龙芯 npm 镜像**：`https://registry.loongnix.cn:5873`——loong64 平台原生包（含 rolldown/lightningcss 的 loong64 绑定）仅此源提供。脚本默认已设置，可用 `DSH_DESKTOP_NPM_REGISTRY` 覆盖。
 - **编译依赖**：`gcc` / `make` / `python3` / `cargo`（部分原生模块用 node-gyp 编译）。
@@ -72,7 +75,10 @@ sudo pacman -U deepseek-harness-0.2.2_rc.2-1-loong64.pkg.tar.zst
 <build-root>/                 # 例如 /home/youruser/dsh-build
 ├── dsh_desktop-loong64/      # ★ 本仓库 (git clone 到这里)
 ├── dsh/                     # 上游源码工作树 (由 sync-upstream.sh / 手动 clone 得到, 不入本仓库)
-├── toolchain/node/          # loong64 Node 24 + pnpm (自备, 不入本仓库)
+├── toolchain/
+│   ├── node/                # setup-toolchain.sh 组装的 bin/ 链接 (Node24+pnpm 同 PATH, 不入本仓库)
+│   ├── pnpm/                # npm --prefix 装的 pnpm 11 (自备, 不入本仓库)
+│   └── node-v24.x-linux-loong64/  # Node 24 归档解压目录 (自备, 不入本仓库)
 └── electron-loong64/
     └── electron-43.7.7/     # darkyzhou/electron-loong64 解压目录 (自备, 不入本仓库)
 ```
@@ -92,12 +98,19 @@ mkdir -p "$BUILD" && cd "$BUILD"
 # 1) 取本仓库
 git clone <本仓库地址> dsh_desktop-loong64
 
-# 2) 准备上游源码 (取目标 tag, 例: dsh-v0.2.2-rc.2)
+# 2) 准备上游源码 (取目标 tag, 例: dsh-v0.2.2-rc.3)
 git clone https://github.com/deepseek-ai/deepseek-harness.git dsh
-cd dsh && git checkout dsh-v0.2.2-rc.2 && cd ..
+cd dsh && git checkout dsh-v0.2.2-rc.3 && cd ..
 
-# 3) 准备 loong64 Node 工具链 -> toolchain/node
-#    (从 https://unofficial-builds.nodejs.org 取 loong64 构建, 解压到 toolchain/node)
+# 3) 准备 Node 24 + pnpm 11, 组装成脚本约定的 toolchain/node/bin
+#    a) Node 24 loong64 归档解压到任意目录 (unofficial-builds.nodejs.org 或本机归档)
+#       export DSH_NODE24_DIR=/path/to/node-v24.14.0-linux-loong64   # 可选, 脚本会自动探测
+#    b) pnpm 从龙芯镜像装到自定义前缀 (loong64 平台包只有该源提供):
+npm install --global pnpm@11.28.5 --prefix ./toolchain/pnpm \
+  --registry https://registry.loongnix.cn:5873 --no-audit --no-fund
+#    c) 组装符号链接 (幂等, 不联网; node/npm/pnpm 落到同一 PATH 前缀):
+cd dsh_desktop-loong64 && ./setup-toolchain.sh && cd ..
+#    npm 的 --prefix 不会把 <prefix>/bin 加进 PATH, 所以这一步不能省。
 
 # 4) 准备 Electron 43.7.7 -> electron-loong64/electron-43.7.7
 #    (从 https://github.com/darkyzhou/electron-loong64/releases 下载 linux-loong64 包解压)
@@ -107,7 +120,7 @@ cd dsh && git checkout dsh-v0.2.2-rc.2 && cd ..
 
 ```bash
 cd dsh_desktop-loong64
-./build.sh            # 构建当前 ../dsh 工作树 (本次验证: dsh-v0.2.2-rc.2)
+./build.sh            # 构建当前 ../dsh 工作树 (本次验证: dsh-v0.2.2-rc.3)
 ```
 
 `build.sh` 会自动依次执行：应用适配补丁 → 构建原生系统包 → 更新运行时锁 → `pnpm install` → **补齐 loong64 原生绑定**（必须在 install 之后）→ `build:lib` → `build:desktop` → `check-runtime-libs.py` → `package-desktop.sh` → `make-deb.sh` + `make-pkg.sh` + `make-dist.sh`。
@@ -205,11 +218,18 @@ if ./check-upstream.sh --quiet; then echo "无更新"; else echo "有更新，�
 ```
 
 ```bash
-./audit-patches.sh dsh-v0.2.2-rc.2 ../dsh   # 单独预检某个 tag 的补丁兼容性 (只读, 失配退出 1)
+./audit-patches.sh dsh-v0.2.2-rc.3 ../dsh   # 单独预检某个 tag 的补丁兼容性 (只读, 失配退出 1)
 ./sync-upstream.sh --apply --yes --with-tarball   # fetch → 预检 → checkout → 打补丁 → 构建 → 打包 → 回写
-./sync-upstream.sh --apply --tag dsh-v0.2.2-rc.2 # 指定目标 tag
+./sync-upstream.sh --apply --tag dsh-v0.2.2-rc.3 # 指定目标 tag
+./sync-upstream.sh --apply --from 5 --tag dsh-v0.2.2-rc.3 --yes  # 断点续跑: 1-4 已完成, 从 [5/11] 继续
 DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不碰工作树/不构建
 ```
+
+> **断点续跑**：`--from 5` 跳过 `[1/11]~[4/11]`（fetch / stash / checkout / 适配 / 运行时锁），
+> 从 `[5/11] build-node-addon.sh` 接着跑完构建与打包，避免中途失败后重复 stash + checkout。
+> 该模式不联网查 tag，`--tag` 可省略（脚本读当前 HEAD 上的 tag）。
+> 环境也无需手工 export：`sync-upstream.sh` 会自举 Node 24 + pnpm 11 的 PATH、
+> loongnix npm 镜像、node-gyp 头文件镜像与 Electron dist（缺失时自动调 `setup-toolchain.sh`）。
 
 > **上游升级必读**：`sync-upstream.sh` 在 `git fetch` 之后、`checkout`/`stash` 之前，
 > 会把目标 tag 用 `git archive` 导出到临时目录并跑 `apply-adaption.sh --check`。
@@ -239,7 +259,7 @@ DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不�
 
 | 项 | 值 |
 | --- | --- |
-| 上游版本 | `dsh-v0.2.2-rc.2`（commit `ddac9676`） |
+| 上游版本 | `dsh-v0.2.2-rc.3`（commit `38a6a5c9`） |
 | Electron dist | `darkyzhou/electron-loong64` **v43.7.7**（进程内 `process.versions.electron = 43.7.7`） |
 | npm `electron` | 锁文件 `44.7.0`（仅用于版本推断；实际二进制为 43.7.7） |
 | Node 工具链 | loong64 Node 24.14.0（构建）+ pnpm 11.28.5；运行时 Node 亦为 24.14.0（上游锁为 24.21.0，因下载带宽不可用改用本机归档） |
@@ -252,3 +272,9 @@ DSH_SYNC_PRECHECK_ONLY=1 ./sync-upstream.sh --apply --yes   # 只跑预检, 不�
 > rc.2 相对 rc.1 的适配增量：`apply-adaption.sh` 新增 P33（发布目标 `targetSchema` 纳入
 > `linux-loong64`，修复 TS2345），P23 目标迁移到 `client-metadata.ts`，P29 在上游已移除
 > 独立 CLI 检查时自动跳过。rc.1/rc.2 干净源码预检均通过。
+>
+> rc.3 未改动适配补丁，主要修复构建链：新增 `setup-toolchain.sh` 组装 Node 24 + pnpm 11
+> （此前 `toolchain/node/bin` 不存在、系统 node 20 又跑不了 pnpm 11，导致 `[5/11]` 报
+> `pnpm: 未找到命令`）；`sync-upstream.sh` 支持 `--from 5` 断点续跑并自举全部构建环境变量；
+> Electron dist 默认路径改为自动探测。全流程 `[5/11]~[11/11]` 验证通过，
+> 详见 `BUILD-RECORD.md` 的 2026-11-14 修订章节。

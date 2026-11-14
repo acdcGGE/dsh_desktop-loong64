@@ -21,7 +21,15 @@ NODE_BIN="${DSH_NODE_BIN:-$BUILD/toolchain/node/bin}"
 if [[ ! -x "$NODE_BIN/node" ]]; then
   NODE_BIN="$(dirname "$(command -v node)")"
 fi
-ELECTRON_DIST="${DSH_DESKTOP_ELECTRON_DIST:-/usr/lib/electron44}"
+# 旧默认值 /usr/lib/electron44 在本机不存在; 优先用同级 electron-loong64 目录
+ELECTRON_DIST="${DSH_DESKTOP_ELECTRON_DIST:-}"
+if [[ ! -x "$ELECTRON_DIST/electron" ]]; then
+  for d in "$BUILD/electron-loong64/electron-43.7.7" /usr/lib/electron44; do
+    [[ -x "$d/electron" ]] || continue
+    ELECTRON_DIST="$d"
+    break
+  done
+fi
 
 export PATH="$NODE_BIN:$PATH"
 export DSH_DESKTOP_TARGET_PLATFORM=linux

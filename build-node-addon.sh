@@ -105,11 +105,19 @@ EOF
 
 echo "==> 重新链接 workspace (识别新平台包)"
 cd "$DSH"
-if [[ -d "$HERE/../toolchain/node/bin" ]]; then
-  export PATH="$(cd "$HERE/../toolchain/node/bin" && pwd):$PATH"
-else
-  echo "    (未找到 $HERE/../toolchain/node/bin, 沿用当前 PATH 中的 node/pnpm)"
+# 不能"沿用当前 PATH": 系统 node 20 跑不了 pnpm 11 (缺 node:sqlite),
+# 且 pnpm 往往根本不在 PATH 里。工具链缺失就自动组装, 组装不了直接报错。
+TOOLCHAIN_BIN="$HERE/../toolchain/node/bin"
+if [[ ! -x "$TOOLCHAIN_BIN/node" || ! -x "$TOOLCHAIN_BIN/pnpm" ]]; then
+  echo "==> 工具链缺失, 调用 setup-toolchain.sh 组装 Node 24 + pnpm 11"
+  "$HERE/setup-toolchain.sh" || { echo "工具链组装失败" >&2; exit 1; }
 fi
+export PATH="$(cd "$TOOLCHAIN_BIN" && pwd):$PATH"
+if ! command -v pnpm >/dev/null 2>&1 || ! node -e 'require("node:sqlite")' >/dev/null 2>&1; then
+  echo "错误: 需要 Node 24 + pnpm 11; 当前 node=$(node --version), pnpm=$(command -v pnpm || echo 缺失)" >&2
+  exit 1
+fi
+echo "    工具链: node $(node --version) / pnpm $(pnpm --version)"
 pnpm install --no-frozen-lockfile 2>&1 | tail -3
 
 echo "==> 编译原生二进制 (landlock-run + flock)"

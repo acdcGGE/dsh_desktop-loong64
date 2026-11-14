@@ -148,8 +148,8 @@ PYEOF
 echo
 echo "==> 完成。现在可以运行桌面端打包:"
 echo "    cd $DSH"
-echo "    export PATH=\"$HERE/../toolchain/node/bin:\$PATH\""
+echo "    export PATH=\"$HERE/../toolchain/node/bin:\$PATH\"   # node24 + pnpm11, 缺则先跑 ./setup-toolchain.sh"
 echo "    DSH_DESKTOP_TARGET_PLATFORM=linux DSH_DESKTOP_TARGET_ARCH=loong64 \\"
-echo "    DSH_DESKTOP_ELECTRON_DIST=/usr/lib/electron44 \\"
+echo "    DSH_DESKTOP_ELECTRON_DIST=${DSH_DESKTOP_ELECTRON_DIST:-$HERE/../electron-loong64/electron-43.7.7} \\"
 echo "    DSH_LOONG64_RIPGREP_SHIM=$HERE/shims/@vscode+ripgrep-linux-loong64 \\"
 echo "    pnpm --dir apps/desktop run package:dir"

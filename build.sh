@@ -19,6 +19,9 @@ DSH="${DSH_SRC_TREE:-$BUILD/dsh}"
 ELECTRON_DIST="${DSH_DESKTOP_ELECTRON_DIST:-$BUILD/electron-loong64/electron-43.7.7}"
 REGISTRY="${DSH_DESKTOP_NPM_REGISTRY:-https://registry.loongnix.cn:5873}"
 
+# 工具链目录缺失时自动组装 (Node 24 + pnpm 11 必须在同一 PATH 前缀)
+[[ -x "$BUILD/toolchain/node/bin/node" && -x "$BUILD/toolchain/node/bin/pnpm" ]] \
+  || "$HERE/setup-toolchain.sh"
 export PATH="$BUILD/toolchain/node/bin:$PATH"
 export DSH_DESKTOP_NPM_REGISTRY="$REGISTRY"
 export npm_config_registry="$REGISTRY"

@@ -21,3 +21,6 @@
 
 # ===== 构建机本地库缓存（由 resolve-runtime-libs.py 生成，非源码）=====
 /blas-libs/
+
+# ===== WorkBuddy 会话数据（本地, 不入库）=====
+/.workbuddy/

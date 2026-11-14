@@ -328,3 +328,77 @@ cd dsh_desktop-loong64-main
 
 > 若 upstream Node 归档仍不可达，先备好 `artifacts/node-loong64.tar.xz`（顶层目录须为
 > `node-v<version>-linux-loong64`），`update-runtime-lock.sh` 会自动按归档内容写锁。
+
+---
+
+## 2026-11-14 修订：修复「[5/11] `pnpm: 未找到命令`」并支持断点续跑
+
+### 现象与现场证据
+
+`sync-upstream.sh --apply` 跑到 `[5/11] build-node-addon.sh` 时：
+
+```
+(未找到 /home/yuri/文档/dsh_desktop-loong64-main/../toolchain/node/bin, 沿用当前 PATH 中的 node/pnpm)
+build-node-addon.sh: 行 113: pnpm: 未找到命令
+```
+
+此时 `[1/11]~[4/11]`（fetch / checkout rc.3 / apply-adaption / update-runtime-lock）已全部完成，
+从头重跑 `--apply` 会再 stash + checkout 一次，没必要且有风险。
+
+### 根因
+
+| 项 | 脚本假设 | 实际情况 |
+| --- | --- | --- |
+| 工具链 | `toolchain/node/bin` 内同时有 node 与 pnpm | 只有 `toolchain/pnpm/`；`toolchain/node/bin` 不存在 |
+| PATH | 调用者已 export | 系统 PATH 仅 `/usr/bin/node` **v20.15.1**，无 pnpm |
+| Node 版本 | `>= 24.9.0`（dsh `engines`） | Node 24.14.0 loong64 在 `~/WorkBuddy/2026-11-11-19-39-49/zcode-loong64-port/opt/node-v24.14.0-linux-loong64` |
+| Electron | `/usr/lib/electron44` | 该目录不存在；真实在 `electron-loong64/electron-43.7.7` |
+
+即使把 pnpm 加进 PATH 也跑不通：pnpm 11.28.5 内部 `require("node:sqlite")`，
+在 node 20 下直接抛 `ERR_UNKNOWN_BUILTIN_MODULE`；它会打印
+`This version of pnpm requires at least Node.js v22.13` 后崩溃。
+所以"沿用当前 PATH"这条回退路径必然失败，不能只补一个 PATH。
+
+### 修复清单
+
+| 文件 | 改动 |
+| --- | --- |
+| `setup-toolchain.sh`（新增） | 幂等探测 Node24 / pnpm，用符号链接组装 `toolchain/node/bin/{node,npm,npx,pnpm,pnpx}` 与 `toolchain/node/include`（node-gyp 头文件缓存用），并自检 `node:sqlite`；不复制 128 MiB 二进制 |
+| `sync-upstream.sh` | 新增 `--from 5` 断点续跑（跳过 1-4，不联网查 tag）；统一自举工具链 PATH、loongnix npm 镜像、`NODEJS_ORG_MIRROR`、`ELECTRON_SKIP_BINARY_DOWNLOAD`、NODE_OPTIONS、Electron dist；删除静默回退 |
+| `build-node-addon.sh` | 工具链缺失时调用 `setup-toolchain.sh`，否则明确报错（不再静默沿用 PATH） |
+| `package-desktop.sh` | Electron 默认路径改为探测 `electron-loong64/electron-43.7.7`，`/usr/lib/electron44` 作兜底 |
+| `update-runtime-lock.sh` | 结尾提示里的 PATH / ELECTRON_DIST 改成实际可用路径 |
+
+### 验证
+
+```
+node v24.14.0 / pnpm 11.28.5（同一 PATH 前缀）
+[5/11] landlock-run  = ELF LoongArch statically linked, 663368 B
+[5/11] system.node   = ELF LoongArch shared object, 70216 B
+verify-launcher-binary: 2 binaries present with the right native format and architecture
+[6/11] pnpm install: Already up to date / Done in 3.8s
+[6b/11] 新装 6 个、已存在 10 个、镜像缺失 5 个（与 rc.1 记录的 5 个完全一致，非致命）
+```
+
+### 复现命令
+
+```bash
+cd dsh_desktop-loong64-main
+./setup-toolchain.sh                 # 只需一次, 幂等
+# 全流程:
+./sync-upstream.sh --apply --tag dsh-v0.2.2-rc.3 --yes
+# 若已跑完 1-4 步后中断, 从 5 继续:
+./sync-upstream.sh --apply --from 5 --tag dsh-v0.2.2-rc.3 --yes
+```
+
+### 本次产物（`dsh-v0.2.2-rc.3`，`[5/11]~[11/11]` 全流程 EXIT=0）
+
+| 文件 | 大小 | SHA256 |
+| --- | --- | --- |
+| `deepseek-harness_0.2.2~rc.3-1_loong64.deb` | 365 MiB | `03c5609de3e3065fcb30d0c0a5a647373492edee30e198bdd44317e0bf15ac83` |
+| `deepseek-harness-0.2.2_rc.3-1-loong64.pkg.tar.zst` | 324 MiB | `4284dd3bf0b4cd99e11d363a4aa13f5bbf66ce50693731d975ddbc7991bed54b` |
+
+`dist/SHA256SUMS` 4 项 `sha256sum -c` 全部通过；deb `Version: 0.2.2~rc.3-1`、
+`Architecture: loong64`、`Installed-Size: 1460016`；pkg `zstd -t` 通过；
+unpacked 主程序为 264 MiB LoongArch ELF PIE。`upstream.conf` 已回写
+`LOCAL_VERSION=0.2.2-rc.3` / `LOCAL_COMMIT=38a6a5c965aa`。

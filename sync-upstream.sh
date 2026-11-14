@@ -10,6 +10,12 @@
 #   --yes            跳过"确认"交互 (用于自动化/CI)
 #   --with-tarball   额外产出 tar.gz 可分发包 (默认不产, 见下方说明)
 #   --formats "deb pkg"  覆盖 upstream.conf 的 PACKAGE_FORMATS
+#   --from 5              断点续跑: [1/11]~[4/11] 已完成后从中途失败处继续,
+#                         不再 fetch/stash/checkout, 也不联网查 tag (配 --tag 或 HEAD 上有 tag)
+#
+# 环境自举 (无需调用者手工 export): Node 24 + pnpm 11 从 toolchain/node/bin 前置到 PATH,
+#   缺失时自动调用 setup-toolchain.sh 组装; 同时设置 loongnix npm 镜像、
+#   node-gyp 头文件镜像与 Electron dist。
 #
 # 执行流程 (--apply):
 #   1. git fetch --tags 上游源码工作树
@@ -56,6 +62,8 @@ APPLY=0
 TARGET_TAG=""
 YES=0
 WITH_TARBALL=0
+# 断点续跑: 1 = 全流程; 5 = 跳过 [1/11]~[4/11] (stash/checkout/适配/运行时锁)
+FROM=1
 args=("$@")
 for ((i=0;i<${#args[@]};i++)); do
   case "${args[i]}" in
@@ -64,8 +72,13 @@ for ((i=0;i<${#args[@]};i++)); do
     --with-tarball) WITH_TARBALL=1 ;;
     --tag)     i=$((i+1)); TARGET_TAG="${args[i]}" ;;
     --formats) i=$((i+1)); FORMATS="${args[i]}" ;;
+    --from)    i=$((i+1)); FROM="${args[i]}" ;;
   esac
 done
+if ! [[ "$FROM" =~ ^[0-9]+$ ]] || (( FROM < 1 || FROM > 5 )); then
+  echo "错误: --from 只支持 1(全流程) 或 5(跳过已完成的 1-4 步)" >&2
+  exit 1
+fi
 
 echo "=================================================="
 echo " dsh_desktop-loong64 —— 上游同步"
@@ -79,9 +92,17 @@ echo
 # ---- 确定目标 tag ----
 # 上游以预发布(rc/alpha)为主, releases/latest 会返回空, 而 tags?per_page=1 按提交时间排序,
 # 遇到 rc.6 / rc.10 这种会取错。故统一走 check-upstream.sh 的语义化版本排序结果。
+# 断点续跑(--from 5)时工作树已经在目标 tag 上, 不再联网查询, 直接读 HEAD 上的 tag。
 API="https://api.github.com"
 UA="dsh-desktop-loong64-updater"
-if [[ -z "$TARGET_TAG" ]]; then
+if (( FROM > 1 )) && [[ -z "$TARGET_TAG" ]]; then
+  TARGET_TAG="$(git -C "$LOCAL_DIR" tag --points-at HEAD 2>/dev/null | head -1)"
+  if [[ -z "$TARGET_TAG" ]]; then
+    echo "错误: --from 续跑请显式传 --tag <tag> (当前 HEAD 无 tag)" >&2
+    exit 1
+  fi
+fi
+if (( FROM == 1 )) && [[ -z "$TARGET_TAG" ]]; then
   if [[ -x "$HERE/check-upstream.sh" ]]; then
     echo "==> 按语义化版本查询上游最新(含预发布) ..."
     TARGET_TAG="$("$HERE/check-upstream.sh" --json 2>/dev/null \
@@ -111,6 +132,9 @@ echo
 
 if [[ "$APPLY" == 0 ]]; then
   echo "---- DRY-RUN: 以下是将要执行的步骤 (加 --apply 才真正执行) ----"
+  if (( FROM > 1 )); then
+    echo "  (--from $FROM: 实际运行会跳过编号 < $FROM 的步骤)"
+  fi
   cat <<PLAN
   1. git -C "$LOCAL_DIR" fetch --tags origin
   2. git -C "$LOCAL_DIR" stash (若有本地适配改动) && checkout "$TARGET_TAG"  (detached HEAD)
@@ -128,7 +152,8 @@ if [[ "$APPLY" == 0 ]]; then
        LOCAL_COMMIT=<切换后的 HEAD>
 PLAN
   echo
-  echo "确认要执行真实同步? 运行: ./sync-upstream.sh --apply --tag $TARGET_TAG"
+  FROM_HINT=""; (( FROM > 1 )) && FROM_HINT="--from $FROM "
+  echo "确认要执行真实同步? 运行: ./sync-upstream.sh --apply ${FROM_HINT}--tag $TARGET_TAG"
   exit 0
 fi
 
@@ -143,6 +168,49 @@ if [[ ! -e "$LOCAL_DIR/.git" ]]; then
   exit 1
 fi
 
+# ---- 构建环境自举 (以前散落在调用者的 shell 里, 缺失即静默失败) ----
+# pnpm 11 内部 require("node:sqlite"), 系统 node 20 会直接抛
+# ERR_UNKNOWN_BUILTIN_MODULE; dsh 的 engines 更要求 node >= 24.9.0。
+NODE_BIN="${DSH_NODE_BIN:-$HERE/../toolchain/node/bin}"
+if [[ ! -x "$NODE_BIN/node" || ! -x "$NODE_BIN/pnpm" ]]; then
+  echo "==> 工具链缺失, 调用 setup-toolchain.sh 组装 Node 24 + pnpm 11"
+  "$HERE/setup-toolchain.sh" || { echo "工具链组装失败" >&2; exit 1; }
+fi
+export PATH="$NODE_BIN:$PATH"
+if ! node -e 'require("node:sqlite")' >/dev/null 2>&1; then
+  echo "错误: PATH 中的 node ($(node --version)) 不支持 node:sqlite, 需要 Node 24" >&2
+  exit 1
+fi
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "错误: pnpm 不在 PATH: $NODE_BIN" >&2
+  exit 1
+fi
+echo "==> 工具链: node $(node --version) / pnpm $(pnpm --version)"
+
+# loong64 原生包只在龙芯镜像; node-gyp 头文件走 npmmirror (nodejs.org 常不可达)
+export DSH_DESKTOP_NPM_REGISTRY="${DSH_DESKTOP_NPM_REGISTRY:-https://registry.loongnix.cn:5873}"
+export npm_config_registry="$DSH_DESKTOP_NPM_REGISTRY"
+export NODEJS_ORG_MIRROR="${NODEJS_ORG_MIRROR:-https://npmmirror.com/mirrors/node}"
+export ELECTRON_SKIP_BINARY_DOWNLOAD="${ELECTRON_SKIP_BINARY_DOWNLOAD:-1}"
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
+export DSH_DESKTOP_UNSIGNED=1
+
+# package-desktop.sh 的默认 /usr/lib/electron44 在本机并不存在
+if [[ ! -x "${DSH_DESKTOP_ELECTRON_DIST:-}/electron" ]]; then
+  for d in "$HERE/../electron-loong64/electron-43.7.7" /usr/lib/electron44; do
+    [[ -x "$d/electron" ]] || continue
+    export DSH_DESKTOP_ELECTRON_DIST="$d"
+    break
+  done
+fi
+if [[ ! -x "${DSH_DESKTOP_ELECTRON_DIST:-}/electron" ]]; then
+  echo "错误: 未找到 electron, 请设置 DSH_DESKTOP_ELECTRON_DIST=/path/to/electron-dist" >&2
+  exit 1
+fi
+echo "==> Electron: $DSH_DESKTOP_ELECTRON_DIST"
+echo "==> npm 镜像: $DSH_DESKTOP_NPM_REGISTRY"
+
+if (( FROM <= 4 )); then
 echo "==> [1/11] git fetch --tags"
 git -C "$LOCAL_DIR" fetch --tags origin || { echo "fetch 失败"; exit 1; }
 
@@ -201,15 +269,20 @@ echo "==> [3/11] apply-adaption.sh"
 "$HERE/apply-adaption.sh" "$LOCAL_DIR" || { echo "apply-adaption 失败"; exit 1; }
 
 # 换 tag 后依赖与构建产物都会变, 必须重装并重新编译, 否则会打包到旧产物
-# loong64 工具链 node 需在 PATH 中
-NODE_BIN="$HERE/../toolchain/node/bin"
-[[ -d "$NODE_BIN" ]] && export PATH="$NODE_BIN:$PATH"
 
 # 必做: primary-runtime 锁的 targets 决定 PrimaryRuntimeTarget 类型
 # (prepare.ts: `export type PrimaryRuntimeTarget = keyof typeof lock.targets`),
 # 缺 linux-loong64 会让 build:lib 的 tsc 直接报类型不匹配。
 echo "==> [4/11] update-runtime-lock.sh"
 "$HERE/update-runtime-lock.sh" "$LOCAL_DIR" || { echo "update-runtime-lock 失败"; exit 1; }
+else
+  # 断点续跑: 工作树已在目标 tag 且适配/运行时锁已就位, 只推导版本信息
+  NEW_COMMIT="$(git -C "$LOCAL_DIR" rev-parse HEAD)"
+  NEW_VER="${TARGET_TAG#dsh-v}"; NEW_VER="${NEW_VER#v}"
+  STASHED=0
+  STASH_MSG=""
+  echo "==> 断点续跑: 跳过 [1/11]~[4/11], HEAD ${NEW_COMMIT:0:12} ($NEW_VER)"
+fi
 
 # 必做: native/system/packages/linux-loong64 是未跟踪目录, checkout 前的 stash
 # 可能带走其中的 package.json/LICENSE, 这里重建平台包与原生二进制。
