@@ -53,11 +53,10 @@ python3 prime-runtime-cache.py       # 预填 runtime 下载缓存，避免构�
 | `build.sh` | 一键全流程（补丁 → 原生包 → 运行时锁 → install → 绑定 → 编译 → 打包） |
 | `setup-toolchain.sh` | 组装 Node 24 + pnpm 11，缺件自动联网拉取 |
 | `prime-runtime-cache.py` | 预填 SHA-256 下载缓存（本地产物 + 通用 wheel）；`--offline` 仅本地 |
-| `prepare-electron-dist.py` | 从带应用残留的 Electron 目录生成纯净 dist，供 `DSH_DESKTOP_ELECTRON_DIST` 使用 |
 | `sync-upstream.sh` | 跟踪上游、预检补丁、构建打包；`--from N` 断点续跑（1–7） |
 | `check-upstream.sh` | 按语义化版本检查上游更新（`--quiet` / `--json` / `--sync`） |
 
-两个顺序陷阱：`pnpm install` 会剪除手动补入的 loong64 绑定，故 `install-loong64-bindings.sh` 必须在每次 install 之后；Electron dist 必须是纯净运行时，混入旧 `app.asar` / `resources/runtime` 会导致 `python3` 符号链接 `EEXIST`。
+顺序陷阱：`pnpm install` 会剪除手动补入的 loong64 绑定，故 `install-loong64-bindings.sh` 必须在每次 install 之后。`DSH_DESKTOP_ELECTRON_DIST` 必须指向**干净的 Electron 运行时目录**（只含二进制 / `.pak` / `.so` / `locales` / `default_app.asar`）；若混入旧应用的 `app.asar` / `resources/runtime`，打包会报 `python3` 符号链接 `EEXIST`。
 
 ## 产物
 
@@ -68,7 +67,7 @@ python3 prime-runtime-cache.py       # 预填 runtime 下载缓存，避免构�
 - `GLIBC_2.42 not found` — 误用官方 Electron 44.x，改用 43.7.7。
 - `binding-linux-loong64-gnu` 找不到 — 绑定被 `pnpm install` 剪掉，重跑 `install-loong64-bindings.sh`。
 - `prepare-runtime` 卡 300 秒超时 — 下载缓存为空，先跑 `prime-runtime-cache.py`。
-- `symlink python3.12 -> python3` EEXIST — Electron dist 混入旧 runtime，用 `prepare-electron-dist.py` 生成纯净副本。
+- `symlink python3.12 -> python3` EEXIST — Electron dist 混入旧应用的 `resources/runtime`，换用干净的 Electron 运行时目录。
 - `ImportError: libxxx.so.N` — 缺系统原生库，见 `MISSING-RUNTIME-LIBS.md`。
 - `ELECTRON_RUN_AS_NODE=1`（部分沙箱会置位）— 启动器已 `unset`。
 

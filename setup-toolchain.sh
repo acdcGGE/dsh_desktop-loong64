@@ -5,25 +5,21 @@
 # 适配仓库的 build.sh / sync-upstream.sh / build-node-addon.sh / package-desktop.sh
 # 都假定工具链在 $BUILD/toolchain/node/bin (node 与 pnpm 同目录)。
 #
-# 本机常见布局并不一致:
-#   Node 24 loong64 : 其它工作区 / deepseek-harness 自带 runtime / 官方归档
-#   pnpm 11         : 装在自定义 prefix 的 bin/ 里, 不在 PATH
-# 本脚本先把本地已有组件链接成期望布局; **缺少时直接联网拉取**, 不再要求调用者
-# 手工准备 Node 24:
+# 组件一律**从网络拉取**, 不使用本机散落的 Node/pnpm 安装 (避免环境差异):
 #   - Node 24 loong64: unofficial-builds.nodejs.org 的 linux-loong64 tar.xz
 #   - Node 头文件:     npmmirror 的 headers tar.gz (node-gyp 编 node-pty 用)
 #   - pnpm 11:         龙芯 npm 镜像的 pnpm tgz, 失败回退 npmjs
-# 下载物缓存在 $BUILD/toolchain/, 脚本幂等, 重复运行不重复下载。
+# 下载物按版本缓存在 $BUILD/toolchain/, 命中缓存即跳过下载; 脚本幂等。
+# 要强制重新下载, 用 DSH_FORCE_DOWNLOAD=1 或删掉 toolchain 下对应缓存文件。
 #
 # 可用环境变量覆盖:
-#   DSH_NODE24_DIR      本地 Node 24 目录 (含 bin/node)
-#   DSH_NODE_VERSION    要下载的 Node 24 版本, 默认 24.14.0
-#   DSH_NODE24_URL      自定义 Node loong64 tar.xz 地址
+#   DSH_NODE_VERSION     要下载的 Node 24 版本, 默认 24.14.0
+#   DSH_NODE24_URL       自定义 Node loong64 tar.xz 地址
 #   DSH_NODE_HEADERS_URL 自定义 Node headers tar.gz 地址
-#   DSH_PNPM_ROOT       pnpm 安装前缀, 默认 $BUILD/toolchain/pnpm
-#   DSH_PNPM_VERSION    要下载的 pnpm 版本, 默认 11.28.5
-#   DSH_PNPM_REGISTRY   pnpm tgz 下载镜像, 默认龙芯镜像
-#   DSH_FORCE_DOWNLOAD=1 忽略本地组件, 强制联网拉取并刷新缓存
+#   DSH_PNPM_ROOT        pnpm 安装前缀, 默认 $BUILD/toolchain/pnpm
+#   DSH_PNPM_VERSION     要下载的 pnpm 版本, 默认 11.28.5
+#   DSH_PNPM_REGISTRY    pnpm tgz 下载镜像, 默认龙芯镜像
+#   DSH_FORCE_DOWNLOAD=1 忽略已有缓存, 强制联网重新下载
 # =============================================================================
 set -euo pipefail
 
@@ -41,7 +37,7 @@ HEADERS_URL="${DSH_NODE_HEADERS_URL:-https://npmmirror.com/mirrors/node/v${NODE_
 PNPM_REGISTRY="${DSH_PNPM_REGISTRY:-https://registry.loongnix.cn:5873}"
 FORCE_DOWNLOAD="${DSH_FORCE_DOWNLOAD:-0}"
 
-# 日志一律写 stderr: fetch_node24/find_node24 的 stdout 用来回传目录路径,
+# 日志一律写 stderr: fetch_node24 的 stdout 用来回传目录路径,
 # 混进日志会让调用方拿到多行字符串当路径用
 log()  { printf '%s\n' "$*" >&2; }
 die()  { echo "错误: $*" >&2; exit 1; }
@@ -57,27 +53,7 @@ download() {
   mv -f "$tmp" "$out"
 }
 
-# ---- 1. 定位 / 下载 loong64 Node 24 ----
-find_node24() {
-  local d
-  [[ "$FORCE_DOWNLOAD" == 1 ]] && return 1
-  if [[ -n "${DSH_NODE24_DIR:-}" && -x "$DSH_NODE24_DIR/bin/node" ]]; then
-    printf '%s\n' "$DSH_NODE24_DIR"
-    return 0
-  fi
-  for d in \
-      "$TOOLCHAIN"/node-v24.* \
-      "$HOME"/WorkBuddy/*/zcode-loong64-port/opt/node-v24.*-linux-loong64 \
-      /opt/deepseek-harness/resources/runtime/primary-runtime/dependencies/node \
-      /opt/node-v24.*-linux-loong64 \
-      /usr/local/node-v24.*-linux-loong64 ; do
-    [[ -x "$d/bin/node" ]] || continue
-    printf '%s\n' "$d"
-    return 0
-  done
-  return 1
-}
-
+# ---- 1. 下载 loong64 Node 24 (只认本脚本下载的缓存, 不用本机散落安装) ----
 fetch_node24() {
   local archive="$TOOLCHAIN/node-v${NODE_VERSION}-linux-loong64.tar.xz"
   local dir="$TOOLCHAIN/node-v${NODE_VERSION}-linux-loong64"
@@ -113,10 +89,7 @@ ensure_headers() {
   log "==> Node 头文件: $hdir/include"
 }
 
-NODE24="$(find_node24 || true)"
-if [[ -z "$NODE24" ]]; then
-  NODE24="$(fetch_node24)"
-fi
+NODE24="$(fetch_node24)"
 NODE_VER="$("$NODE24/bin/node" --version)" || die "$NODE24/bin/node 无法执行"
 NODE_MAJOR="${NODE_VER#v}"; NODE_MAJOR="${NODE_MAJOR%%.*}"
 (( NODE_MAJOR >= 24 )) || die "$NODE24/bin/node 是 $NODE_VER, dsh 要求 Node >= 24.9.0"
