@@ -32,7 +32,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.environ.get("DSH_BUILD_DIR", os.path.dirname(HERE))
 DSH = os.environ.get("DSH_SRC_TREE", os.path.join(BUILD, "dsh"))
 PNPM = os.path.join(DSH, "node_modules", ".pnpm")
-REGISTRY = os.environ.get("DSH_DESKTOP_NPM_REGISTRY", "https://registry.loongnix.cn:5873")
+# loong64 绑定只在龙芯镜像上有, 不能跟着通用 npm 镜像 (npmmirror/npmjs) 一起改;
+# 单独给一个覆盖变量, 默认永远是龙芯镜像。
+REGISTRY = os.environ.get("DSH_LOONG64_BINDINGS_REGISTRY", "https://registry.loongnix.cn:5873")
 TMP = tempfile.mkdtemp()
 
 if not os.path.isdir(PNPM):

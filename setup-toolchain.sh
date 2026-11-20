@@ -4,46 +4,73 @@
 #
 # 适配仓库的 build.sh / sync-upstream.sh / build-node-addon.sh / package-desktop.sh
 # 都假定工具链在 $BUILD/toolchain/node/bin (node 与 pnpm 同目录)。
-# 本机实际布局却是:
-#   Node 24.14.0 loong64 : <其它工作区>/zcode-loong64-port/opt/node-v24.14.0-linux-loong64
-#   pnpm 11.28.5        : $BUILD/toolchain/pnpm
-# 且系统 PATH 里只有 node v20.15.1、没有 pnpm。pnpm 11 要求 Node >= 22.13
-# (内部 require("node:sqlite")), dsh 的 package.json engines 更要求 >= 24.9.0,
-# 所以 build-node-addon.sh 里"沿用当前 PATH 中的 node/pnpm"这条回退必然失败。
 #
-# 本脚本用符号链接把两处拼成脚本期望的布局; 幂等, 不复制 128 MiB 的 node。
-# 可用 DSH_NODE24_DIR / DSH_PNPM_ROOT 覆盖探测结果。
+# 本机常见布局并不一致:
+#   Node 24 loong64 : 其它工作区 / deepseek-harness 自带 runtime / 官方归档
+#   pnpm 11         : 装在自定义 prefix 的 bin/ 里, 不在 PATH
+# 本脚本先把本地已有组件链接成期望布局; **缺少时直接联网拉取**, 不再要求调用者
+# 手工准备 Node 24:
+#   - Node 24 loong64: unofficial-builds.nodejs.org 的 linux-loong64 tar.xz
+#   - Node 头文件:     npmmirror 的 headers tar.gz (node-gyp 编 node-pty 用)
+#   - pnpm 11:         龙芯 npm 镜像的 pnpm tgz, 失败回退 npmjs
+# 下载物缓存在 $BUILD/toolchain/, 脚本幂等, 重复运行不重复下载。
 #
-# 换一台机器时, 先把这两样备齐 (本脚本不联网下载):
-#   1) Node 24 loong64: 解压 node-v24.x-linux-loong64.tar.xz (unofficial-builds.nodejs.org
-#      或本机归档), 用 DSH_NODE24_DIR=/path/to/node-v24.x-linux-loong64 指给本脚本。
-#   2) pnpm 11: 从龙芯镜像装到自定义前缀 ——
-#       npm install --global pnpm@11.28.5 --prefix "$BUILD/toolchain/pnpm" \
-#         --registry https://registry.loongnix.cn:5873 --no-audit --no-fund
-#      注意 npm 用 --prefix 自定义前缀时 **不会**把 <prefix>/bin 加进 PATH, 这正是
-#      原构建脚本报 "pnpm: 未找到命令" 的原因; 组装链接即是为消除这个路径错位。
-#      (pnpm 11 还要求 Node >= 22.13: 内部 require("node:sqlite"), 系统 node 20 跑不了。)
+# 可用环境变量覆盖:
+#   DSH_NODE24_DIR      本地 Node 24 目录 (含 bin/node)
+#   DSH_NODE_VERSION    要下载的 Node 24 版本, 默认 24.14.0
+#   DSH_NODE24_URL      自定义 Node loong64 tar.xz 地址
+#   DSH_NODE_HEADERS_URL 自定义 Node headers tar.gz 地址
+#   DSH_PNPM_ROOT       pnpm 安装前缀, 默认 $BUILD/toolchain/pnpm
+#   DSH_PNPM_VERSION    要下载的 pnpm 版本, 默认 11.28.5
+#   DSH_PNPM_REGISTRY   pnpm tgz 下载镜像, 默认龙芯镜像
+#   DSH_FORCE_DOWNLOAD=1 忽略本地组件, 强制联网拉取并刷新缓存
 # =============================================================================
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD="$(cd "$HERE/.." && pwd)"
-DEST="$BUILD/toolchain/node"
+TOOLCHAIN="$BUILD/toolchain"
+DEST="$TOOLCHAIN/node"
 BIN="$DEST/bin"
-PNPM_ROOT="${DSH_PNPM_ROOT:-$BUILD/toolchain/pnpm}"
+PNPM_ROOT="${DSH_PNPM_ROOT:-$TOOLCHAIN/pnpm}"
 
-# ---- 1. 定位 loong64 Node 24 ----
+NODE_VERSION="${DSH_NODE_VERSION:-24.14.0}"
+PNPM_VERSION="${DSH_PNPM_VERSION:-11.28.5}"
+NODE_URL="${DSH_NODE24_URL:-https://unofficial-builds.nodejs.org/download/release/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-loong64.tar.xz}"
+HEADERS_URL="${DSH_NODE_HEADERS_URL:-https://npmmirror.com/mirrors/node/v${NODE_VERSION}/node-v${NODE_VERSION}-headers.tar.gz}"
+PNPM_REGISTRY="${DSH_PNPM_REGISTRY:-https://registry.loongnix.cn:5873}"
+FORCE_DOWNLOAD="${DSH_FORCE_DOWNLOAD:-0}"
+
+# 日志一律写 stderr: fetch_node24/find_node24 的 stdout 用来回传目录路径,
+# 混进日志会让调用方拿到多行字符串当路径用
+log()  { printf '%s\n' "$*" >&2; }
+die()  { echo "错误: $*" >&2; exit 1; }
+
+# 下载到 .part 再原子改名, 避免中断留下半个缓存包
+download() {
+  local url="$1" out="$2" tmp="$2.part.$$"
+  log "==> 下载 $url"
+  if ! curl -fL --retry 3 --connect-timeout 20 --max-time 900 -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$out"
+}
+
+# ---- 1. 定位 / 下载 loong64 Node 24 ----
 find_node24() {
   local d
+  [[ "$FORCE_DOWNLOAD" == 1 ]] && return 1
   if [[ -n "${DSH_NODE24_DIR:-}" && -x "$DSH_NODE24_DIR/bin/node" ]]; then
     printf '%s\n' "$DSH_NODE24_DIR"
     return 0
   fi
   for d in \
-      "$BUILD"/toolchain/node-v24.* \
+      "$TOOLCHAIN"/node-v24.* \
+      "$HOME"/WorkBuddy/*/zcode-loong64-port/opt/node-v24.*-linux-loong64 \
+      /opt/deepseek-harness/resources/runtime/primary-runtime/dependencies/node \
       /opt/node-v24.*-linux-loong64 \
-      /usr/local/node-v24.*-linux-loong64 \
-      "$HOME"/WorkBuddy/*/zcode-loong64-port/opt/node-v24.*-linux-loong64 ; do
+      /usr/local/node-v24.*-linux-loong64 ; do
     [[ -x "$d/bin/node" ]] || continue
     printf '%s\n' "$d"
     return 0
@@ -51,26 +78,84 @@ find_node24() {
   return 1
 }
 
-NODE24="$(find_node24)" || {
-  echo "错误: 未找到 Node 24 (loong64)。请设置 DSH_NODE24_DIR=/path/to/node-v24.x-linux-loong64" >&2
-  exit 1
+fetch_node24() {
+  local archive="$TOOLCHAIN/node-v${NODE_VERSION}-linux-loong64.tar.xz"
+  local dir="$TOOLCHAIN/node-v${NODE_VERSION}-linux-loong64"
+  mkdir -p "$TOOLCHAIN"
+  if [[ ! -x "$dir/bin/node" || "$FORCE_DOWNLOAD" == 1 ]]; then
+    [[ -f "$archive" && "$FORCE_DOWNLOAD" != 1 ]] || download "$NODE_URL" "$archive" \
+      || die "Node 下载失败; 可用 DSH_NODE24_URL / DSH_NODE_VERSION 指定可用归档"
+    log "==> 解压 Node v$NODE_VERSION 到 $dir"
+    tar -xJf "$archive" -C "$TOOLCHAIN"
+    [[ -x "$dir/bin/node" ]] || die "归档中未找到 node-v${NODE_VERSION}-linux-loong64/bin/node"
+  fi
+  printf '%s\n' "$dir"
 }
-NODE_VER="$("$NODE24/bin/node" --version)"
-NODE_MAJOR="${NODE_VER#v}"; NODE_MAJOR="${NODE_MAJOR%%.*}"
-if (( NODE_MAJOR < 24 )); then
-  echo "错误: $NODE24/bin/node 是 $NODE_VER, dsh 要求 Node >= 24.9.0" >&2
-  exit 1
-fi
 
-# ---- 2. 定位 pnpm ----
-if [[ ! -e "$PNPM_ROOT/bin/pnpm" ]]; then
-  echo "错误: 未找到 pnpm: $PNPM_ROOT/bin/pnpm" >&2
-  exit 1
+# 某些本地 Node 目录 (如应用自带 runtime) 没有 include/, node-gyp 编 node-pty 会失败
+ensure_headers() {
+  local dir="$1"
+  [[ -f "$dir/include/node/node.h" ]] && return 0
+  local archive="$TOOLCHAIN/node-v${NODE_VERSION}-headers.tar.gz"
+  local hdir="$TOOLCHAIN/node-v${NODE_VERSION}-headers"
+  [[ -f "$archive" ]] || download "$HEADERS_URL" "$archive" \
+    || die "Node 头文件下载失败; 可用 DSH_NODE_HEADERS_URL 指定镜像"
+  mkdir -p "$hdir"
+  tar -xzf "$archive" -C "$hdir" --strip-components=1
+  [[ -f "$hdir/include/node/node.h" ]] || die "头文件归档缺少 include/node/node.h"
+  if [[ -L "$dir/include" ]]; then
+    ln -sfn "$hdir/include" "$dir/include"
+  elif [[ ! -e "$dir/include" ]]; then
+    ln -s "$hdir/include" "$dir/include"
+  else
+    die "$dir/include 已存在但不是符号链接且缺少 node.h, 请手工处理"
+  fi
+  log "==> Node 头文件: $hdir/include"
+}
+
+NODE24="$(find_node24 || true)"
+if [[ -z "$NODE24" ]]; then
+  NODE24="$(fetch_node24)"
+fi
+NODE_VER="$("$NODE24/bin/node" --version)" || die "$NODE24/bin/node 无法执行"
+NODE_MAJOR="${NODE_VER#v}"; NODE_MAJOR="${NODE_MAJOR%%.*}"
+(( NODE_MAJOR >= 24 )) || die "$NODE24/bin/node 是 $NODE_VER, dsh 要求 Node >= 24.9.0"
+ensure_headers "$NODE24"
+
+# ---- 2. 定位 / 下载 pnpm ----
+fetch_pnpm() {
+  local archive="$TOOLCHAIN/pnpm-${PNPM_VERSION}.tgz"
+  mkdir -p "$PNPM_ROOT"
+  if [[ ! -f "$archive" ]]; then
+    if ! download "$PNPM_REGISTRY/pnpm/-/pnpm-${PNPM_VERSION}.tgz" "$archive"; then
+      log "==> 龙芯镜像不可用, 回退 registry.npmjs.org"
+      download "https://registry.npmjs.org/pnpm/-/pnpm-${PNPM_VERSION}.tgz" "$archive" \
+        || die "pnpm 下载失败; 可用 DSH_PNPM_REGISTRY / DSH_PNPM_VERSION 指定"
+    fi
+  fi
+  log "==> 解压 pnpm $PNPM_VERSION 到 $PNPM_ROOT"
+  tar -xzf "$archive" -C "$PNPM_ROOT" --strip-components=1
+  [[ -f "$PNPM_ROOT/bin/pnpm.cjs" ]] || die "pnpm 归档缺少 bin/pnpm.cjs"
+
+  # npm 的 pnpm 包只有 .cjs 入口, 这里补两个可执行 wrapper 供构建脚本调用
+  cat > "$PNPM_ROOT/bin/pnpm" <<EOF
+#!/usr/bin/env bash
+exec "$NODE24/bin/node" "$PNPM_ROOT/bin/pnpm.cjs" "\$@"
+EOF
+  cat > "$PNPM_ROOT/bin/pnpx" <<EOF
+#!/usr/bin/env bash
+exec "$NODE24/bin/node" "$PNPM_ROOT/bin/pnpx.cjs" "\$@"
+EOF
+  chmod +x "$PNPM_ROOT/bin/pnpm" "$PNPM_ROOT/bin/pnpx"
+}
+
+if [[ ! -e "$PNPM_ROOT/bin/pnpm" || "$FORCE_DOWNLOAD" == 1 ]]; then
+  fetch_pnpm
 fi
 
 # ---- 3. 组装 $BUILD/toolchain/node/bin ----
 mkdir -p "$BIN"
-# 链接到 node24 自带的 npm/npx (它们本身是相对符号链接, 会相对 $NODE24/bin 解析)
+# 链接到 node24 自带的 npm/npx (若存在; 它们本身可能是相对符号链接)
 for name in node npm npx; do
   [[ -e "$NODE24/bin/$name" ]] && ln -sfn "$NODE24/bin/$name" "$BIN/$name"
 done
@@ -84,20 +169,18 @@ fi
 
 # ---- 4. 验证: 必须能在同一 PATH 下跑通 pnpm 11 ----
 export PATH="$BIN:$PATH"
-echo "==> Node 24 源:   $NODE24"
-echo "==> pnpm 源:      $PNPM_ROOT"
-echo "==> 组装目录:     $BIN"
-echo "    node  $(command -v node) -> $(node --version)"
-echo "    pnpm  $(command -v pnpm) -> $(pnpm --version)"
-[[ "$(node --version)" == "$NODE_VER" ]] || { echo "错误: PATH 中 node 不是工具链 node" >&2; exit 1; }
-node -e 'require("node:sqlite")' >/dev/null 2>&1 || {
-  echo "错误: 该 node 不支持 node:sqlite, pnpm 11 无法运行" >&2
-  exit 1
-}
+log "==> Node 24 源:   $NODE24"
+log "==> pnpm 源:      $PNPM_ROOT"
+log "==> 组装目录:     $BIN"
+log "    node  $(command -v node) -> $(node --version)"
+log "    pnpm  $(command -v pnpm) -> $(pnpm --version)"
+[[ "$(node --version)" == "$NODE_VER" ]] || die "PATH 中 node 不是工具链 node"
+[[ -f "$NODE24/include/node/node.h" ]] || die "缺少 Node 头文件: $NODE24/include/node/node.h"
+node -e 'require("node:sqlite")' >/dev/null 2>&1 || die "该 node 不支持 node:sqlite, pnpm 11 无法运行"
 PNPM_MAJOR="$(pnpm --version)"; PNPM_MAJOR="${PNPM_MAJOR%%.*}"
-(( PNPM_MAJOR >= 10 )) || { echo "错误: pnpm 版本过低: $(pnpm --version)" >&2; exit 1; }
+(( PNPM_MAJOR >= 10 )) || die "pnpm 版本过低: $(pnpm --version)"
 
-echo
-echo "==> 工具链就绪。使用前先:"
-echo "    export PATH=\"$BIN:\$PATH\""
-echo "    或在 sync-upstream.sh / build.sh 中自动前置该目录。"
+log ""
+log "==> 工具链就绪。使用前先:"
+log "    export PATH=\"$BIN:\$PATH\""
+log "    或在 sync-upstream.sh / build.sh 中自动前置该目录。"

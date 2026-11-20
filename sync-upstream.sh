@@ -10,8 +10,10 @@
 #   --yes            跳过"确认"交互 (用于自动化/CI)
 #   --with-tarball   额外产出 tar.gz 可分发包 (默认不产, 见下方说明)
 #   --formats "deb pkg"  覆盖 upstream.conf 的 PACKAGE_FORMATS
-#   --from 5              断点续跑: [1/11]~[4/11] 已完成后从中途失败处继续,
-#                         不再 fetch/stash/checkout, 也不联网查 tag (配 --tag 或 HEAD 上有 tag)
+#   --from 5              断点续跑: 跳过 [1/11]~[4/11], 从 build-node-addon 继续
+#   --from 7              跳过 [1/11]~[6b/11], 从 build:lib 继续 (手工补过 loong64 绑定时用,
+#                         避免再次 pnpm install 把手动放入的绑定剪掉)
+#   两者都需配 --tag 或 HEAD 上有 tag, 不再 fetch/stash/checkout
 #
 # 环境自举 (无需调用者手工 export): Node 24 + pnpm 11 从 toolchain/node/bin 前置到 PATH,
 #   缺失时自动调用 setup-toolchain.sh 组装; 同时设置 loongnix npm 镜像、
@@ -75,8 +77,8 @@ for ((i=0;i<${#args[@]};i++)); do
     --from)    i=$((i+1)); FROM="${args[i]}" ;;
   esac
 done
-if ! [[ "$FROM" =~ ^[0-9]+$ ]] || (( FROM < 1 || FROM > 5 )); then
-  echo "错误: --from 只支持 1(全流程) 或 5(跳过已完成的 1-4 步)" >&2
+if ! [[ "$FROM" =~ ^[0-9]+$ ]] || (( FROM < 1 || FROM > 7 )); then
+  echo "错误: --from 支持 1(全流程)、2-6(跳过对应前序)、7(从 build:lib 开始)" >&2
   exit 1
 fi
 
@@ -211,6 +213,8 @@ echo "==> Electron: $DSH_DESKTOP_ELECTRON_DIST"
 echo "==> npm 镜像: $DSH_DESKTOP_NPM_REGISTRY"
 
 if (( FROM <= 4 )); then
+# 只有 FROM=1 才联网 fetch 并做只读预检; 断点续跑(tag 已在本地)不能卡在 fetch 上
+if (( FROM == 1 )); then
 echo "==> [1/11] git fetch --tags"
 git -C "$LOCAL_DIR" fetch --tags origin || { echo "fetch 失败"; exit 1; }
 
@@ -235,6 +239,7 @@ if [[ "${DSH_SYNC_PRECHECK_ONLY:-0}" == 1 ]]; then
   exit 0
 fi
 rm -rf "$PRECHECK_DIR"
+fi
 
 echo "==> [2/11] checkout $TARGET_TAG"
 # 工作树上有 loong64 适配补丁造成的本地修改, 直接 checkout 会被 git 拒绝。
@@ -286,9 +291,12 @@ fi
 
 # 必做: native/system/packages/linux-loong64 是未跟踪目录, checkout 前的 stash
 # 可能带走其中的 package.json/LICENSE, 这里重建平台包与原生二进制。
+if (( FROM <= 5 )); then
 echo "==> [5/11] build-node-addon.sh"
 "$HERE/build-node-addon.sh" "$LOCAL_DIR" || { echo "build-node-addon 失败"; exit 1; }
+fi
 
+if (( FROM <= 6 )); then
 echo "==> [6/11] pnpm install"
 ( cd "$LOCAL_DIR" && pnpm install ) || { echo "pnpm install 失败"; exit 1; }
 
@@ -296,6 +304,7 @@ echo "==> [6/11] pnpm install"
 # "Cannot find native binding" (rc.1 构建时的实际故障)。必须与 build.sh 同序。
 echo "==> [6b/11] install-loong64-bindings.sh"
 python3 "$HERE/install-loong64-bindings.sh" || { echo "install-loong64-bindings 失败"; exit 1; }
+fi
 
 echo "==> [7/11] pnpm run build:lib"
 ( cd "$LOCAL_DIR" && pnpm run build:lib ) || { echo "build:lib 失败"; exit 1; }
